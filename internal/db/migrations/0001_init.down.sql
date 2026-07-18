@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS admin_overrides;
+DROP TABLE IF EXISTS caller_names;
+DROP TABLE IF EXISTS reports;
+DROP TABLE IF EXISTS phone_numbers;
+DROP TABLE IF EXISTS devices;
