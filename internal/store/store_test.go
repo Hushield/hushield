@@ -6,63 +6,9 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-
-	"spamfilter/internal/db"
+	"spamfilter/internal/dbtest"
 	"spamfilter/internal/scoring"
 )
-
-const testDSN = "root@tcp(127.0.0.1:3306)/spamfilter_test?parseTime=true&multiStatements=true"
-
-func connectTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	sqlDB, err := sql.Open("mysql", testDSN)
-	if err != nil {
-		t.Skipf("skipping: cannot open test DB: %v", err)
-	}
-	if err := sqlDB.Ping(); err != nil {
-		sqlDB.Close()
-		t.Skipf("skipping: test DB unreachable: %v", err)
-	}
-	return sqlDB
-}
-
-func dropAllTables(t *testing.T, sqlDB *sql.DB) {
-	t.Helper()
-	tables := []string{
-		"admin_overrides",
-		"caller_names",
-		"reports",
-		"phone_numbers",
-		"devices",
-		"schema_migrations",
-	}
-	if _, err := sqlDB.Exec("SET FOREIGN_KEY_CHECKS=0"); err != nil {
-		t.Fatalf("failed to disable FK checks: %v", err)
-	}
-	defer sqlDB.Exec("SET FOREIGN_KEY_CHECKS=1")
-	for _, table := range tables {
-		if _, err := sqlDB.Exec("DROP TABLE IF EXISTS " + table); err != nil {
-			t.Fatalf("failed to drop table %s: %v", table, err)
-		}
-	}
-}
-
-// prepareTestDB connects, resets, and migrates a fresh copy of the test
-// schema, skipping the test entirely if the DB is unreachable.
-func prepareTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	sqlDB := connectTestDB(t)
-	dropAllTables(t, sqlDB)
-	if err := db.Migrate(sqlDB); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(func() {
-		dropAllTables(t, sqlDB)
-		sqlDB.Close()
-	})
-	return sqlDB
-}
 
 // insertDevice inserts a device row with the given trust_weight and returns
 // its device_id.
@@ -83,7 +29,7 @@ func insertDevice(t *testing.T, sqlDB *sql.DB, keyID string, trustWeight float64
 }
 
 func TestUpsertPhoneNumber(t *testing.T) {
-	sqlDB := prepareTestDB(t)
+	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 	now := time.Now()
 
@@ -117,7 +63,7 @@ func TestUpsertPhoneNumber(t *testing.T) {
 }
 
 func TestUpsertReport(t *testing.T) {
-	sqlDB := prepareTestDB(t)
+	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 	now := time.Now()
 
@@ -168,7 +114,7 @@ func TestUpsertReport(t *testing.T) {
 }
 
 func TestUpsertCallerName(t *testing.T) {
-	sqlDB := prepareTestDB(t)
+	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 	now := time.Now()
 
@@ -208,7 +154,7 @@ func TestUpsertCallerName(t *testing.T) {
 }
 
 func TestTouchDevice(t *testing.T) {
-	sqlDB := prepareTestDB(t)
+	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 	now := time.Now()
 
@@ -234,9 +180,20 @@ func TestTouchDevice(t *testing.T) {
 }
 
 func TestRecomputeNumber_ScamReportsCrossThresholds(t *testing.T) {
-	sqlDB := prepareTestDB(t)
+	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
-	now := time.Now()
+
+	// Fixed instant with a sub-second fraction below .5s: MySQL's TIMESTAMP
+	// columns round created_at DOWN to 10:30:00 (verified against the actual
+	// server), while RecomputeNumber's own `now` still carries the .1s
+	// fraction. Without RecomputeNumber's now.Truncate(time.Second) fix, that
+	// leaves a nonzero positive age gap (0.1s) between now and created_at,
+	// giving a decay just under 1.0 and a score just under the 2.0
+	// SuspectThreshold -- flipping this from "suspected" to "unknown". Using
+	// a fixed instant (instead of time.Now()) makes this rounding-down edge
+	// deterministic on every run rather than depending on which side of .5s
+	// the wall clock's fraction happens to land on.
+	now := time.Date(2024, 3, 15, 10, 30, 0, 100_000_000, time.UTC)
 
 	phoneNumberID, err := UpsertPhoneNumber(ctx, sqlDB, "+14155550004", now)
 	if err != nil {
@@ -297,7 +254,7 @@ func TestRecomputeNumber_ScamReportsCrossThresholds(t *testing.T) {
 }
 
 func TestRecomputeNumber_OverrideBlock(t *testing.T) {
-	sqlDB := prepareTestDB(t)
+	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 	now := time.Now()
 
@@ -322,7 +279,7 @@ func TestRecomputeNumber_OverrideBlock(t *testing.T) {
 }
 
 func TestUpsertReport_UsesTransaction(t *testing.T) {
-	sqlDB := prepareTestDB(t)
+	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 	now := time.Now()
 

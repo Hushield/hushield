@@ -1,56 +1,16 @@
-package db
+package db_test
 
 import (
-	"database/sql"
 	"testing"
+
+	"spamfilter/internal/db"
+	"spamfilter/internal/dbtest"
 )
 
-const testDSN = "root@tcp(127.0.0.1:3306)/spamfilter_test?parseTime=true&multiStatements=true"
-
-// connectTestDB opens a connection to the test database, skipping the test
-// if the DB is unreachable.
-func connectTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	sqlDB, err := sql.Open("mysql", testDSN)
-	if err != nil {
-		t.Skipf("skipping: cannot open test DB: %v", err)
-	}
-	if err := sqlDB.Ping(); err != nil {
-		sqlDB.Close()
-		t.Skipf("skipping: test DB unreachable: %v", err)
-	}
-	return sqlDB
-}
-
-func dropAllTables(t *testing.T, sqlDB *sql.DB) {
-	t.Helper()
-	tables := []string{
-		"admin_overrides",
-		"caller_names",
-		"reports",
-		"phone_numbers",
-		"devices",
-		"schema_migrations",
-	}
-	if _, err := sqlDB.Exec("SET FOREIGN_KEY_CHECKS=0"); err != nil {
-		t.Fatalf("failed to disable FK checks: %v", err)
-	}
-	defer sqlDB.Exec("SET FOREIGN_KEY_CHECKS=1")
-	for _, table := range tables {
-		if _, err := sqlDB.Exec("DROP TABLE IF EXISTS " + table); err != nil {
-			t.Fatalf("failed to drop table %s: %v", table, err)
-		}
-	}
-}
-
 func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
-	sqlDB := connectTestDB(t)
-	defer sqlDB.Close()
+	sqlDB := dbtest.SetupDB(t)
 
-	dropAllTables(t, sqlDB)
-	defer dropAllTables(t, sqlDB)
-
-	if err := Migrate(sqlDB); err != nil {
+	if err := db.Migrate(sqlDB); err != nil {
 		t.Fatalf("first Migrate() failed: %v", err)
 	}
 
@@ -75,7 +35,7 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 	}
 
 	// Second run must be a no-op: no error, no duplicate rows.
-	if err := Migrate(sqlDB); err != nil {
+	if err := db.Migrate(sqlDB); err != nil {
 		t.Fatalf("second Migrate() failed: %v", err)
 	}
 

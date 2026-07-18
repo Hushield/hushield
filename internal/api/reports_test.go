@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"spamfilter/internal/config"
+	"spamfilter/internal/dbtest"
 	"spamfilter/internal/token"
 )
 
@@ -60,9 +61,7 @@ func postReport(router http.Handler, tok string, body reportRequestBody) *httpte
 }
 
 func TestReportsEndpoint_ScoringLifecycle_DB(t *testing.T) {
-	database := connectAPITestDB(t)
-	defer database.Close()
-	prepareDevicesTable(t, database)
+	database := dbtest.SetupDB(t)
 
 	cfg := config.Config{
 		AttestMode:        "mock",

@@ -10,15 +10,11 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-
 	"spamfilter/internal/attest"
 	"spamfilter/internal/config"
-	"spamfilter/internal/db"
+	"spamfilter/internal/dbtest"
 	"spamfilter/internal/token"
 )
-
-const testDSN = "root@tcp(127.0.0.1:3306)/spamfilter_test?parseTime=true&multiStatements=true"
 
 func decodeEnvelope(t *testing.T, body []byte) (success bool, data json.RawMessage) {
 	t.Helper()
@@ -128,9 +124,7 @@ func TestVerifyEndpoint_VerifierFailure(t *testing.T) {
 // token flow through the router against the live test DB, asserting a device
 // row is created and the returned token parses to that device_id.
 func TestVerifyEndpoint_HappyPath_DB(t *testing.T) {
-	database := connectAPITestDB(t)
-	defer database.Close()
-	prepareDevicesTable(t, database)
+	database := dbtest.SetupDB(t)
 
 	cfg := config.Config{
 		AttestMode:        "mock",
@@ -202,24 +196,4 @@ func doVerify(t *testing.T, h *attestHandler, body verifyRequest) *httptest.Resp
 	rec := httptest.NewRecorder()
 	h.handleVerify(rec, req)
 	return rec
-}
-
-func connectAPITestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	sqlDB, err := sql.Open("mysql", testDSN)
-	if err != nil {
-		t.Skipf("skipping: cannot open test DB: %v", err)
-	}
-	if err := sqlDB.Ping(); err != nil {
-		sqlDB.Close()
-		t.Skipf("skipping: test DB unreachable: %v", err)
-	}
-	return sqlDB
-}
-
-func prepareDevicesTable(t *testing.T, sqlDB *sql.DB) {
-	t.Helper()
-	if err := db.Migrate(sqlDB); err != nil {
-		t.Fatalf("migrate test DB: %v", err)
-	}
 }
