@@ -30,10 +30,12 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 	mux.HandleFunc("POST /api/v1/attest/challenge", attestH.handleChallenge)
 	mux.HandleFunc("POST /api/v1/attest/verify", attestH.handleVerify)
 
-	// DeviceAuth is constructed here so later tasks can wrap /reports and
-	// /blocklist with deviceAuth.RequireDevice. It is intentionally not
-	// applied to the attest routes above.
-	_ = NewDeviceAuth(signer)
+	// deviceAuth guards routes that require an attested device token. It is
+	// intentionally not applied to the attest routes above.
+	deviceAuth := NewDeviceAuth(signer)
+
+	reportsH := &reportsHandler{db: db}
+	mux.Handle("POST /api/v1/reports", deviceAuth.RequireDevice(http.HandlerFunc(reportsH.handleCreate)))
 
 	return RequestIDMiddleware(mux)
 }
