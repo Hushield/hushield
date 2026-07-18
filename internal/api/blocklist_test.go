@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 	"time"
 
@@ -111,8 +110,8 @@ func TestBlocklistEndpoint_DB(t *testing.T) {
 	if resp.Count != len(resp.Entries) {
 		t.Errorf("count = %d, want len(entries) = %d", resp.Count, len(resp.Entries))
 	}
-	if resp.Cursor <= 0 {
-		t.Errorf("cursor = %d, want > 0", resp.Cursor)
+	if resp.Cursor == "" || resp.Cursor == "0.0" {
+		t.Errorf("cursor = %q, want a non-zero compound cursor", resp.Cursor)
 	}
 
 	var found *blocklistEntryResponse
@@ -211,7 +210,7 @@ func TestBlocklistEndpoint_DeltaAndSpoofPrefix(t *testing.T) {
 
 	// Delta: calling again with since=cursor and no new activity returns no
 	// entries, echoing the same cursor back.
-	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/blocklist?prefix=415555&since="+itoa(resp2.Cursor), nil)
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/blocklist?prefix=415555&since="+resp2.Cursor, nil)
 	req3.Header.Set("Authorization", "Bearer "+callerToken)
 	rec3 := httptest.NewRecorder()
 	router.ServeHTTP(rec3, req3)
@@ -227,10 +226,6 @@ func TestBlocklistEndpoint_DeltaAndSpoofPrefix(t *testing.T) {
 		t.Errorf("delta entries = %d, want 0 (no activity since cursor)", len(resp3.Entries))
 	}
 	if resp3.Cursor != resp2.Cursor {
-		t.Errorf("delta cursor = %d, want echoed %d", resp3.Cursor, resp2.Cursor)
+		t.Errorf("delta cursor = %q, want echoed %q", resp3.Cursor, resp2.Cursor)
 	}
-}
-
-func itoa(v int64) string {
-	return strconv.FormatInt(v, 10)
 }

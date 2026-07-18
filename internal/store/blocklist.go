@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,10 +45,29 @@ type blocklistRow struct {
 	updatedAtUnix int64
 }
 
+// blocklistPrefixLength is the exact length of a valid NPA-NXX prefix (an
+// area code + exchange, e.g. "415555"). The handler already validates this
+// before calling in; isValidBlocklistPrefix re-checks it here so the store
+// stays self-protecting against a future direct caller passing an
+// unvalidated prefix straight into a LIKE pattern.
+const blocklistPrefixLength = 6
+
+// keysetPredicate is the compound-cursor WHERE clause shared by the base and
+// spoof queries: rows strictly after (sec, id) in (updated_at, phone_number_id)
+// order. A plain "UNIX_TIMESTAMP(updated_at) > ?" filter with no tie-break on
+// phone_number_id silently drops rows once more than one page's worth of
+// rows share the same updated_at second (very plausible right after a
+// RecomputeAll batch updates many numbers in the same second): the page
+// boundary lands inside that second, nextCursor becomes that second, and the
+// next call's "> cursor" filter permanently skips the rows that shared it.
+// The compound predicate below is drop-free: any row beyond a page's
+// truncation cut has a key strictly greater than that page's nextCursor.
+const keysetPredicate = `(UNIX_TIMESTAMP(phone_numbers.updated_at) > ? OR (UNIX_TIMESTAMP(phone_numbers.updated_at) = ? AND phone_numbers.phone_number_id > ?))`
+
 const blocklistBaseQuery = `SELECT phone_numbers.phone_number_id, phone_numbers.number, phone_numbers.status, phone_numbers.updated_at, UNIX_TIMESTAMP(phone_numbers.updated_at) FROM phone_numbers
 WHERE phone_numbers.status IN ('blocked','overridden_block','suspected')
-  AND UNIX_TIMESTAMP(phone_numbers.updated_at) > ?
-ORDER BY phone_numbers.updated_at ASC LIMIT ?`
+  AND ` + keysetPredicate + `
+ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?`
 
 // blocklistSpoofQuery finds sparse-signal numbers that spoof the caller's own
 // NPA-NXX prefix. Rationale: the spoof-adjusted score
@@ -60,64 +80,93 @@ const blocklistSpoofQuery = `SELECT phone_numbers.phone_number_id, phone_numbers
 WHERE phone_numbers.number LIKE ?
   AND phone_numbers.status = 'unknown'
   AND phone_numbers.cached_score > 0
-  AND UNIX_TIMESTAMP(phone_numbers.updated_at) > ?
-ORDER BY phone_numbers.updated_at ASC LIMIT ?`
+  AND ` + keysetPredicate + `
+ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?`
 
 // BlocklistDelta returns the numbers a device should block or label that
-// changed since sinceUnix (a UNIX_TIMESTAMP cursor; 0 for a full snapshot),
-// optionally widened by prefix (the caller's own 6-digit NPA-NXX) to include
-// neighbor-spoof candidates. It also returns nextCursor: the max updated_at
-// (unix seconds) among the returned entries, or sinceUnix if none were
-// returned.
-func BlocklistDelta(ctx context.Context, db *sql.DB, sinceUnix int64, prefix string, limit int) ([]BlocklistEntry, int64, error) {
-	baseRows, err := queryBlocklistRows(ctx, db, blocklistBaseQuery, sinceUnix, limit)
+// changed since the compound cursor (sinceSec, sinceID) -- (0, 0) for a full
+// snapshot -- optionally widened by prefix (the caller's own 6-digit
+// NPA-NXX) to include neighbor-spoof candidates. If prefix is non-empty but
+// not exactly 6 ASCII digits, it is treated as no prefix (the spoof query is
+// skipped): the handler already validates prefix before calling in, but the
+// store does not trust that as its only line of defense, since an
+// unvalidated prefix fed straight into the spoof query's LIKE pattern could
+// otherwise inject wildcards. It also returns nextSec/nextID: the
+// (updated_at, phone_number_id) key of the last entry returned, or the
+// incoming cursor if nothing was returned.
+func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uint64, prefix string, limit int) ([]BlocklistEntry, int64, uint64, error) {
+	baseRows, err := queryBlocklistRows(ctx, db, blocklistBaseQuery, sinceSec, sinceSec, sinceID, limit)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
-	merged := make(map[uint64]blocklistRow, len(baseRows))
-	order := make([]uint64, 0, len(baseRows))
+	effectivePrefix := prefix
+	if effectivePrefix != "" && !isValidBlocklistPrefix(effectivePrefix) {
+		effectivePrefix = ""
+	}
+
+	byID := make(map[uint64]blocklistRow, len(baseRows))
 	for _, row := range baseRows {
-		merged[row.phoneNumberID] = row
-		order = append(order, row.phoneNumberID)
+		byID[row.phoneNumberID] = row
 	}
 
-	if prefix != "" {
-		spoofRows, err := queryBlocklistRows(ctx, db, blocklistSpoofQuery, "+1"+prefix+"%", sinceUnix, limit)
+	if effectivePrefix != "" {
+		spoofRows, err := queryBlocklistRows(ctx, db, blocklistSpoofQuery, "+1"+effectivePrefix+"%", sinceSec, sinceSec, sinceID, limit)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		for _, row := range spoofRows {
 			// A number present in both sets keeps its base status/action.
-			if _, exists := merged[row.phoneNumberID]; exists {
+			if _, exists := byID[row.phoneNumberID]; exists {
 				continue
 			}
-			merged[row.phoneNumberID] = row
-			order = append(order, row.phoneNumberID)
+			byID[row.phoneNumberID] = row
 		}
 	}
 
-	if len(order) == 0 {
-		return []BlocklistEntry{}, sinceUnix, nil
+	if len(byID) == 0 {
+		return []BlocklistEntry{}, sinceSec, sinceID, nil
 	}
 
-	names, err := lookupTopNames(ctx, db, order)
+	// The base and spoof result sets are each individually ordered by the
+	// DB, but merging them (and deduping) does not preserve a combined
+	// order, and each was independently limited so the merged set can hold
+	// up to 2x limit rows. Re-sort by the same (updated_at, phone_number_id)
+	// key and truncate to limit so the page boundary -- and thus
+	// nextCursor -- is correct for the merged result, not just one source.
+	merged := make([]blocklistRow, 0, len(byID))
+	for _, row := range byID {
+		merged = append(merged, row)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].updatedAtUnix != merged[j].updatedAtUnix {
+			return merged[i].updatedAtUnix < merged[j].updatedAtUnix
+		}
+		return merged[i].phoneNumberID < merged[j].phoneNumberID
+	})
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+
+	ids := make([]uint64, len(merged))
+	for i, row := range merged {
+		ids[i] = row.phoneNumberID
+	}
+
+	names, err := lookupTopNames(ctx, db, ids)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
-	entries := make([]BlocklistEntry, 0, len(order))
-	var maxUpdated int64
-	for _, id := range order {
-		row := merged[id]
-
+	entries := make([]BlocklistEntry, 0, len(merged))
+	for _, row := range merged {
 		action := "label"
 		if row.status == scoring.StatusBlocked || row.status == scoring.StatusOverriddenBlock {
 			action = "block"
 		}
 
 		var namePtr *string
-		if name, ok := names[id]; ok {
+		if name, ok := names[row.phoneNumberID]; ok {
 			n := name
 			namePtr = &n
 		}
@@ -127,21 +176,29 @@ func BlocklistDelta(ctx context.Context, db *sql.DB, sinceUnix int64, prefix str
 			Status:         row.status,
 			Action:         action,
 			Name:           namePtr,
-			SpoofSuspected: prefix != "" && strings.HasPrefix(row.number, "+1"+prefix),
+			SpoofSuspected: effectivePrefix != "" && strings.HasPrefix(row.number, "+1"+effectivePrefix),
 			UpdatedAt:      row.updatedAt,
 		})
+	}
 
-		if row.updatedAtUnix > maxUpdated {
-			maxUpdated = row.updatedAtUnix
+	last := merged[len(merged)-1]
+	return entries, last.updatedAtUnix, last.phoneNumberID, nil
+}
+
+// isValidBlocklistPrefix reports whether prefix is exactly 6 ASCII digits
+// (an NPA-NXX). Mirrors the API handler's own validation; kept as a
+// second, independent check inside the store so BlocklistDelta stays
+// self-protecting against a future caller that skips the handler.
+func isValidBlocklistPrefix(prefix string) bool {
+	if len(prefix) != blocklistPrefixLength {
+		return false
+	}
+	for _, r := range prefix {
+		if r < '0' || r > '9' {
+			return false
 		}
 	}
-
-	nextCursor := maxUpdated
-	if nextCursor == 0 {
-		nextCursor = sinceUnix
-	}
-
-	return entries, nextCursor, nil
+	return true
 }
 
 func queryBlocklistRows(ctx context.Context, db *sql.DB, query string, args ...any) ([]blocklistRow, error) {

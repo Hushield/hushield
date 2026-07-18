@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestBlocklistDelta_ActionsAndStatuses(t *testing.T) {
 		t.Fatalf("RecomputeNumber (suspected): %v", err)
 	}
 
-	entries, cursor, err := BlocklistDelta(ctx, sqlDB, 0, "", 500)
+	entries, nextSec, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta: %v", err)
 	}
@@ -74,8 +75,8 @@ func TestBlocklistDelta_ActionsAndStatuses(t *testing.T) {
 		t.Errorf("suspected entry status = %q, want %q", suspectedEntry.Status, scoring.StatusSuspected)
 	}
 
-	if cursor <= 0 {
-		t.Errorf("cursor = %d, want > 0", cursor)
+	if nextSec <= 0 {
+		t.Errorf("cursor sec = %d, want > 0", nextSec)
 	}
 }
 
@@ -105,7 +106,7 @@ func TestBlocklistDelta_SpoofPrefix(t *testing.T) {
 		t.Fatalf("seed status = %s, want %s", status, scoring.StatusUnknown)
 	}
 
-	entries, _, err := BlocklistDelta(ctx, sqlDB, 0, "", 500)
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta (no prefix): %v", err)
 	}
@@ -115,7 +116,7 @@ func TestBlocklistDelta_SpoofPrefix(t *testing.T) {
 		}
 	}
 
-	entries, _, err = BlocklistDelta(ctx, sqlDB, 0, "415555", 500)
+	entries, _, _, err = BlocklistDelta(ctx, sqlDB, 0, 0, "415555", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta (with prefix): %v", err)
 	}
@@ -160,7 +161,7 @@ func TestBlocklistDelta_DedupeKeepsBaseStatusForMatchingPrefix(t *testing.T) {
 		t.Fatalf("RecomputeNumber: %v", err)
 	}
 
-	entries, _, err := BlocklistDelta(ctx, sqlDB, 0, "415555", 500)
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "415555", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta: %v", err)
 	}
@@ -231,7 +232,7 @@ func TestBlocklistDelta_NameAgreementFloor(t *testing.T) {
 		t.Fatalf("RecomputeNumber (lone): %v", err)
 	}
 
-	entries, _, err := BlocklistDelta(ctx, sqlDB, 0, "", 500)
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta: %v", err)
 	}
@@ -291,15 +292,15 @@ func TestBlocklistDelta_CursorOnlyReturnsChanged(t *testing.T) {
 		t.Fatalf("RecomputeNumber (B): %v", err)
 	}
 
-	firstEntries, cursor, err := BlocklistDelta(ctx, sqlDB, 0, "", 500)
+	firstEntries, sec1, id1, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta (initial): %v", err)
 	}
 	if len(firstEntries) != 2 {
 		t.Fatalf("initial entries = %d, want 2", len(firstEntries))
 	}
-	if cursor <= 0 {
-		t.Fatalf("initial cursor = %d, want > 0", cursor)
+	if sec1 <= 0 {
+		t.Fatalf("initial cursor sec = %d, want > 0", sec1)
 	}
 
 	// Bump only numberA's updated_at, a couple of seconds later so its
@@ -313,7 +314,7 @@ func TestBlocklistDelta_CursorOnlyReturnsChanged(t *testing.T) {
 		t.Fatalf("RecomputeNumber (A bump): %v", err)
 	}
 
-	deltaEntries, newCursor, err := BlocklistDelta(ctx, sqlDB, cursor, "", 500)
+	deltaEntries, sec2, id2, err := BlocklistDelta(ctx, sqlDB, sec1, id1, "", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta (delta): %v", err)
 	}
@@ -323,8 +324,8 @@ func TestBlocklistDelta_CursorOnlyReturnsChanged(t *testing.T) {
 	if deltaEntries[0].Number != numberA {
 		t.Errorf("delta entry number = %q, want %q", deltaEntries[0].Number, numberA)
 	}
-	if newCursor <= cursor {
-		t.Errorf("newCursor = %d, want > %d", newCursor, cursor)
+	if sec2 < sec1 || (sec2 == sec1 && id2 <= id1) {
+		t.Errorf("newCursor (%d,%d) not strictly greater than previous (%d,%d)", sec2, id2, sec1, id1)
 	}
 }
 
@@ -332,14 +333,127 @@ func TestBlocklistDelta_EmptyResultEchoesSince(t *testing.T) {
 	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 
-	entries, cursor, err := BlocklistDelta(ctx, sqlDB, 1234567890, "", 500)
+	entries, nextSec, nextID, err := BlocklistDelta(ctx, sqlDB, 1234567890, 42, "", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta: %v", err)
 	}
 	if len(entries) != 0 {
 		t.Errorf("entries = %d, want 0", len(entries))
 	}
-	if cursor != 1234567890 {
-		t.Errorf("cursor = %d, want 1234567890 (echoed since)", cursor)
+	if nextSec != 1234567890 || nextID != 42 {
+		t.Errorf("cursor = (%d,%d), want (1234567890,42) (echoed since)", nextSec, nextID)
+	}
+}
+
+// TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows pins the
+// keyset-pagination fix: with a plain second-only cursor and no tie-break on
+// phone_number_id, once more than one page's worth of rows share the same
+// updated_at second (as a Task-5 RecomputeAll batch update plausibly
+// produces), the page boundary lands inside that second, nextCursor becomes
+// that second, and the next call's "> cursor" filter permanently skips the
+// rows that shared it. This test fails against that old behavior and passes
+// with the compound (sec, id) keyset cursor.
+func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	// Truncate to whole seconds: RecomputeNumber writes this exact value as
+	// updated_at, and all four numbers below share it, forcing them into
+	// the same updated_at second.
+	now := time.Now().UTC().Truncate(time.Second)
+
+	numbers := []string{
+		"+14155559601",
+		"+14155559602",
+		"+14155559603",
+		"+14155559604",
+	}
+	for i, number := range numbers {
+		numberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+		if err != nil {
+			t.Fatalf("UpsertPhoneNumber (%d): %v", i, err)
+		}
+		for _, suffix := range []string{"1", "2", "3"} {
+			deviceID := insertDevice(t, sqlDB, fmt.Sprintf("keyset-device-%d-%s", i, suffix), 1.0)
+			if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+				t.Fatalf("UpsertReport (%d): %v", i, err)
+			}
+		}
+		if _, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil {
+			t.Fatalf("RecomputeNumber (%d): %v", i, err)
+		}
+	}
+
+	const limit = 2
+	seen := make(map[string]int)
+	var sec int64
+	var id uint64
+	for page := 0; page < 10; page++ {
+		entries, nextSec, nextID, err := BlocklistDelta(ctx, sqlDB, sec, id, "", limit)
+		if err != nil {
+			t.Fatalf("BlocklistDelta page %d: %v", page, err)
+		}
+		if len(entries) == 0 {
+			break
+		}
+		for _, e := range entries {
+			seen[e.Number]++
+		}
+		if nextSec == sec && nextID == id {
+			t.Fatalf("cursor did not advance on page %d: (%d,%d)", page, nextSec, nextID)
+		}
+		sec, id = nextSec, nextID
+	}
+
+	if len(seen) != len(numbers) {
+		t.Fatalf("saw %d distinct numbers across pages, want %d; seen=%v", len(seen), len(numbers), seen)
+	}
+	for _, number := range numbers {
+		if seen[number] != 1 {
+			t.Errorf("number %q returned %d times across pages, want exactly 1", number, seen[number])
+		}
+	}
+}
+
+// TestBlocklistDelta_MalformedPrefixSkipsSpoofQuery pins the store-side
+// defense-in-depth guard: BlocklistDelta must not trust prefix as already
+// validated by the handler. A malformed prefix containing LIKE wildcards
+// must not be allowed to widen the spoof query into matching numbers under
+// an unrelated NPA-NXX.
+func TestBlocklistDelta_MalformedPrefixSkipsSpoofQuery(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// A sparse-signal number (single "other" category report, stays
+	// "unknown" with cached_score > 0) under a completely different
+	// NPA-NXX than the malformed prefix below. If the store trusted prefix
+	// as-is, "+1" + "%%%%%%" + "%" would match virtually any "+1" number,
+	// leaking this one into a caller-scoped spoof result it has no
+	// business appearing in.
+	number := "+19995551234"
+	numberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+	device := insertDevice(t, sqlDB, "malformed-prefix-device", 1.0)
+	if _, err := UpsertReport(ctx, sqlDB, device, numberID, scoring.CategoryOther, scoring.VoteSpam, now); err != nil {
+		t.Fatalf("UpsertReport: %v", err)
+	}
+	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	if err != nil {
+		t.Fatalf("RecomputeNumber: %v", err)
+	}
+	if status != scoring.StatusUnknown {
+		t.Fatalf("seed status = %s, want %s", status, scoring.StatusUnknown)
+	}
+
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "%%%%%%", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (malformed prefix): %v", err)
+	}
+	for _, e := range entries {
+		if e.Number == number {
+			t.Errorf("sparse-signal number leaked via malformed prefix %q -- store must validate prefix itself, not just trust the caller", "%%%%%%")
+		}
 	}
 }

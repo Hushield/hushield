@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"spamfilter/internal/store"
 )
@@ -25,7 +26,7 @@ type blocklistEntryResponse struct {
 type blocklistResponse struct {
 	Entries []blocklistEntryResponse `json:"entries"`
 	Count   int                      `json:"count"`
-	Cursor  int64                    `json:"cursor"`
+	Cursor  string                   `json:"cursor"`
 }
 
 const (
@@ -51,10 +52,10 @@ func (h *blocklistHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	since := parseSinceParam(r.URL.Query().Get("since"))
+	sinceSec, sinceID := parseSinceParam(r.URL.Query().Get("since"))
 	limit := parseLimitParam(r.URL.Query().Get("limit"))
 
-	entries, cursor, err := store.BlocklistDelta(r.Context(), h.db, since, prefix, limit)
+	entries, nextSec, nextID, err := store.BlocklistDelta(r.Context(), h.db, sinceSec, sinceID, prefix, limit)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to load blocklist", Code: "internal_error"})
@@ -64,7 +65,7 @@ func (h *blocklistHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	resp := blocklistResponse{
 		Entries: make([]blocklistEntryResponse, 0, len(entries)),
 		Count:   len(entries),
-		Cursor:  cursor,
+		Cursor:  formatCursor(nextSec, nextID),
 	}
 	for _, e := range entries {
 		resp.Entries = append(resp.Entries, blocklistEntryResponse{
@@ -78,17 +79,34 @@ func (h *blocklistHandler) handleList(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, http.StatusOK, resp, requestID)
 }
 
-// parseSinceParam parses the since cursor query param, defaulting to (and
-// clamping negative/non-numeric values to) 0, a full snapshot.
-func parseSinceParam(raw string) int64 {
-	if raw == "" {
-		return 0
+// parseSinceParam parses the since cursor query param -- an opaque
+// "<sec>.<id>" compound cursor as returned in a prior response's cursor
+// field -- into its (sec, id) parts. Empty, "0", "0.0", or any malformed
+// value defaults to (0, 0), a full snapshot.
+func parseSinceParam(raw string) (int64, uint64) {
+	if raw == "" || raw == "0" {
+		return 0, 0
 	}
-	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || v < 0 {
-		return 0
+	secPart, idPart, ok := strings.Cut(raw, ".")
+	if !ok {
+		return 0, 0
 	}
-	return v
+	sec, err := strconv.ParseInt(secPart, 10, 64)
+	if err != nil || sec < 0 {
+		return 0, 0
+	}
+	id, err := strconv.ParseUint(idPart, 10, 64)
+	if err != nil {
+		return 0, 0
+	}
+	return sec, id
+}
+
+// formatCursor renders a compound (sec, id) cursor as the opaque "<sec>.<id>"
+// string returned in the response's cursor field and accepted back by
+// parseSinceParam.
+func formatCursor(sec int64, id uint64) string {
+	return strconv.FormatInt(sec, 10) + "." + strconv.FormatUint(id, 10)
 }
 
 // parseLimitParam parses the limit query param, defaulting non-numeric or
