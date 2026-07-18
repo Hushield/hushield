@@ -45,13 +45,17 @@ func RecomputeAllNumbers(ctx context.Context, db *sql.DB, now time.Time) (int, e
 
 // RecomputeAllTrust recomputes every device's trust_weight from its
 // reporting history via trust.Compute, and refreshes its cached
-// report_count. It returns how many devices were processed.
+// report_count. It excludes seed devices (key_id LIKE 'seed:%', see
+// EnsureSeedDevice): their trust_weight is a fixed, admin-configured value
+// representing confidence in the public dataset, not something to be
+// recomputed from reporting history. It returns how many devices were
+// processed.
 func RecomputeAllTrust(ctx context.Context, db *sql.DB, now time.Time) (int, error) {
 	// See RecomputeNumber for why now is truncated to whole seconds before
 	// being used to derive an age from a MySQL TIMESTAMP column.
 	now = now.UTC().Truncate(time.Second)
 
-	const idsQuery = `SELECT device_id FROM devices`
+	const idsQuery = `SELECT device_id FROM devices WHERE devices.key_id NOT LIKE 'seed:%'`
 
 	rows, err := db.QueryContext(ctx, idsQuery)
 	if err != nil {
