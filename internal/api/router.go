@@ -40,6 +40,13 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 	blocklistH := &blocklistHandler{db: db}
 	mux.Handle("GET /api/v1/blocklist", deviceAuth.RequireDevice(http.HandlerFunc(blocklistH.handleList)))
 
+	// adminAuth guards the admin override route with a static bearer token,
+	// independent of device attestation.
+	adminAuth := NewAdminAuth(cfg.AdminToken)
+
+	adminOverridesH := &adminOverridesHandler{db: db}
+	mux.Handle("POST /api/v1/admin/overrides", adminAuth.RequireAdmin(http.HandlerFunc(adminOverridesH.handleCreate)))
+
 	return RequestIDMiddleware(mux)
 }
 
