@@ -17,6 +17,10 @@ func main() {
 		log.Fatalf("loading config: %v", err)
 	}
 
+	if cfg.DeviceTokenSecretIsDefault {
+		log.Printf("WARNING: DEVICE_TOKEN_SECRET is unset; using an insecure dev default. Set DEVICE_TOKEN_SECRET in production.")
+	}
+
 	sqlDB, err := db.Open(cfg.DBDsn)
 	if err != nil {
 		log.Fatalf("connecting to database: %v", err)

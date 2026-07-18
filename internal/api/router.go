@@ -4,23 +4,47 @@ import (
 	"database/sql"
 	"net/http"
 
+	"spamfilter/internal/attest"
 	"spamfilter/internal/config"
+	"spamfilter/internal/token"
 )
 
 // NewRouter builds the top-level HTTP handler: a ServeMux wrapped in the
-// request_id middleware, with /healthz mounted directly.
+// request_id middleware, with /healthz and the attest endpoints mounted.
 func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", healthzHandler)
 
-	// /api/v1/... routes attach here in later tasks (reports, blocklist,
-	// admin overrides, etc). db and cfg are threaded through NewRouter so
-	// those handlers can be constructed and mounted below.
-	_ = db
-	_ = cfg
+	signer := token.NewSigner([]byte(cfg.DeviceTokenSecret))
+
+	attestH := &attestHandler{
+		db:           db,
+		store:        attest.NewMemoryChallengeStore(),
+		verifier:     buildVerifier(cfg),
+		signer:       signer,
+		challengeTTL: cfg.ChallengeTTL,
+		tokenTTL:     cfg.DeviceTokenTTL,
+	}
+
+	mux.HandleFunc("POST /api/v1/attest/challenge", attestH.handleChallenge)
+	mux.HandleFunc("POST /api/v1/attest/verify", attestH.handleVerify)
+
+	// DeviceAuth is constructed here so later tasks can wrap /reports and
+	// /blocklist with deviceAuth.RequireDevice. It is intentionally not
+	// applied to the attest routes above.
+	_ = NewDeviceAuth(signer)
 
 	return RequestIDMiddleware(mux)
+}
+
+// buildVerifier selects the App Attest verifier per config: a MockVerifier
+// for dev/tests, or the real AppleVerifier when ATTEST_MODE=apple.
+func buildVerifier(cfg config.Config) attest.Verifier {
+	if cfg.AttestMode == "apple" {
+		return attest.NewAppleVerifier(cfg.AppID, attest.DefaultAppleRoots())
+	}
+	return attest.NewMockVerifier([]byte("mock-public-key-der"), nil)
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {
