@@ -37,6 +37,9 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 	reportsH := &reportsHandler{db: db}
 	mux.Handle("POST /api/v1/reports", deviceAuth.RequireDevice(http.HandlerFunc(reportsH.handleCreate)))
 
+	blocklistH := &blocklistHandler{db: db}
+	mux.Handle("GET /api/v1/blocklist", deviceAuth.RequireDevice(http.HandlerFunc(blocklistH.handleList)))
+
 	return RequestIDMiddleware(mux)
 }
 
