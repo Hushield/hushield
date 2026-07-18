@@ -1,0 +1,15 @@
+# Byte-compiled / caches
+*.log
+
+# Dependencies
+/vendor/
+
+# Env / secrets
+.env
+credentials.md
+
+# Superpowers scratch
+/.superpowers/
+
+# Build output
+/bin/
