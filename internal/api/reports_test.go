@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +184,66 @@ func assertSingleReportRow(t *testing.T, database *sql.DB, deviceID, phoneNumber
 	}
 	if count > 1 {
 		t.Errorf("reports count for device %d = %d, want <= 1", deviceID, count)
+	}
+}
+
+// TestReportsEndpoint_ConcurrentSameNumber_DB proves the per-number recompute
+// is serialized by the transaction's row lock: N devices reporting the SAME
+// number concurrently must all land in the cached score, driving it to blocked
+// with report_count == N -- without the cron ever running. Before the fix
+// (recompute on the pool after commit) a lost update could drop reports.
+func TestReportsEndpoint_ConcurrentSameNumber_DB(t *testing.T) {
+	database := dbtest.SetupDB(t)
+
+	cfg := config.Config{
+		AttestMode:        "mock",
+		DeviceTokenSecret: "concurrency-test-secret",
+		DeviceTokenTTL:    time.Hour,
+		ChallengeTTL:      5 * time.Minute,
+	}
+	router := NewRouter(database, cfg)
+	signer := token.NewSigner([]byte(cfg.DeviceTokenSecret))
+
+	number := uniquePhoneNumber()
+	const n = 8
+
+	// Mint all devices/tokens up front (t is not goroutine-safe), then fire
+	// the reports concurrently.
+	tokens := make([]string, n)
+	for i := 0; i < n; i++ {
+		_, tokens[i] = mintDeviceToken(t, database, signer, 1.0)
+	}
+
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := postReport(router, tokens[i], reportRequestBody{Number: number, Category: "scam", Vote: "spam"})
+			codes[i] = rec.Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i, code := range codes {
+		if code != http.StatusCreated {
+			t.Fatalf("report %d status = %d, want 201", i, code)
+		}
+	}
+
+	var status string
+	var reportCount int
+	if err := database.QueryRow(
+		"SELECT status, report_count FROM phone_numbers WHERE number = ?", number,
+	).Scan(&status, &reportCount); err != nil {
+		t.Fatalf("select phone_number: %v", err)
+	}
+	if status != "blocked" {
+		t.Errorf("status = %q, want blocked", status)
+	}
+	if reportCount != n {
+		t.Errorf("report_count = %d, want %d (a lost update dropped a report)", reportCount, n)
 	}
 }
 

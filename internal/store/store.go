@@ -88,7 +88,12 @@ func TouchDevice(ctx context.Context, exec Execer, deviceID uint64, incrementRep
 // phoneNumberID, runs them through scoring.Score, and caches the result onto
 // phone_numbers. It is the shared recompute unit used after every report
 // write. It returns the recomputed status.
-func RecomputeNumber(ctx context.Context, db *sql.DB, phoneNumberID uint64, now time.Time) (scoring.Status, error) {
+// RecomputeNumber accepts an Execer so it can run either directly against the
+// pool (the batch/backstop path) or, critically, inside the same transaction
+// that just wrote the report/override. Running it in-tx makes the row lock
+// held by UpsertPhoneNumber serialize concurrent recomputes for the same
+// number, closing the lost-update race between the read and the cached write.
+func RecomputeNumber(ctx context.Context, exec Execer, phoneNumberID uint64, now time.Time) (scoring.Status, error) {
 	// MySQL TIMESTAMP columns round created_at to the nearest second, which
 	// can put it up to 0.5s ahead of an unrounded now and make a
 	// just-written report look negatively aged. Truncating now to whole
@@ -102,7 +107,7 @@ FROM reports
 JOIN devices ON devices.device_id = reports.device_id
 WHERE reports.phone_number_id = ?`
 
-	rows, err := db.QueryContext(ctx, reportsQuery, phoneNumberID)
+	rows, err := exec.QueryContext(ctx, reportsQuery, phoneNumberID)
 	if err != nil {
 		return "", err
 	}
@@ -136,7 +141,7 @@ WHERE reports.phone_number_id = ?`
 
 	const overrideQuery = `SELECT admin_overrides.mode FROM admin_overrides WHERE admin_overrides.phone_number_id = ?`
 	var overrideMode sql.NullString
-	if err := db.QueryRowContext(ctx, overrideQuery, phoneNumberID).Scan(&overrideMode); err != nil && err != sql.ErrNoRows {
+	if err := exec.QueryRowContext(ctx, overrideQuery, phoneNumberID).Scan(&overrideMode); err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
 	override := scoring.OverrideNone
@@ -159,7 +164,7 @@ WHERE reports.phone_number_id = ?`
 	const updateQuery = `UPDATE phone_numbers
 SET cached_score = ?, status = ?, top_category = ?, report_count = ?, counter_count = ?, updated_at = ?
 WHERE phone_number_id = ?`
-	if _, err := db.ExecContext(ctx, updateQuery, res.Score, string(res.Status), topCategory, reportCount, counterCount, now.UTC(), phoneNumberID); err != nil {
+	if _, err := exec.ExecContext(ctx, updateQuery, res.Score, string(res.Status), topCategory, reportCount, counterCount, now.UTC(), phoneNumberID); err != nil {
 		return "", err
 	}
 

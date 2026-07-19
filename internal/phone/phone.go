@@ -60,6 +60,9 @@ func Normalize(raw string) (string, error) {
 // matching. For +1 (NANP) numbers this is the 6-digit NPA-NXX (area code +
 // exchange, the digits immediately after "+1"). For other country codes it
 // is a best-effort leading-6-significant-digit prefix of the full number.
+//
+// Kept for client/serve-path parity (the blocklist neighbor-spoof prefix
+// format); it has no direct Go caller yet.
 func Prefix(e164 string) string {
 	digits := strings.TrimPrefix(e164, "+")
 

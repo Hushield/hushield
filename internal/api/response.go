@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 )
@@ -49,6 +50,13 @@ func WriteSuccess(w http.ResponseWriter, status int, data any, requestID string)
 		Errors:  []APIError{},
 		Meta:    newMeta(requestID),
 	})
+}
+
+// logInternalError records the underlying cause of a 500 response
+// server-side, tagged with the request id for traceability. The error detail
+// is intentionally never included in the client-facing envelope.
+func logInternalError(requestID, action string, err error) {
+	log.Printf("request_id=%s internal_error action=%q: %v", requestID, action, err)
 }
 
 // WriteError writes a failure envelope with the given HTTP status and errors.

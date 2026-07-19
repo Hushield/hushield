@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"spamfilter/internal/attest"
@@ -44,6 +45,7 @@ func (h *attestHandler) handleChallenge(w http.ResponseWriter, r *http.Request) 
 
 	ch, err := h.store.Issue(now, h.challengeTTL)
 	if err != nil {
+		logInternalError(requestID, "issue challenge", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to issue challenge", Code: "internal_error"})
 		return
@@ -85,6 +87,16 @@ func (h *attestHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 			APIError{Field: "key_id", Message: "key_id is required", Code: "bad_request"})
 		return
 	}
+	// The "seed:" prefix is reserved for synthetic seed devices (see
+	// store.EnsureSeedDevice), which are excluded from trust recompute and
+	// carry a fixed high trust_weight. Rejecting it here stops a client --
+	// especially under ATTEST_MODE=mock -- from claiming a seed identity and
+	// riding that fixed weight.
+	if strings.HasPrefix(body.KeyID, "seed:") {
+		WriteError(w, http.StatusBadRequest, requestID,
+			APIError{Field: "key_id", Message: "key_id is reserved", Code: "bad_request"})
+		return
+	}
 	attBytes, err := base64.StdEncoding.DecodeString(body.Attestation)
 	if err != nil || len(attBytes) == 0 {
 		WriteError(w, http.StatusBadRequest, requestID,
@@ -115,6 +127,7 @@ func (h *attestHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 	deviceID, err := upsertDevice(r.Context(), h.db, body.KeyID, pubDER, receipt, now)
 	if err != nil {
+		logInternalError(requestID, "persist device", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to persist device", Code: "internal_error"})
 		return

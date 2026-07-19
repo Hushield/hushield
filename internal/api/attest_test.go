@@ -120,6 +120,36 @@ func TestVerifyEndpoint_VerifierFailure(t *testing.T) {
 	}
 }
 
+func TestVerifyEndpoint_RejectsReservedKeyID(t *testing.T) {
+	store := attest.NewMemoryChallengeStore()
+	now := time.Now()
+	ch, err := store.Issue(now, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	h := newTestHandler(store, attest.NewMockVerifier(nil, nil), nil)
+
+	// A client-supplied key_id in the reserved "seed:" namespace must be
+	// rejected before any device is persisted, so a mock-mode client cannot
+	// claim a seed device's fixed high trust_weight.
+	body := verifyRequest{
+		KeyID:       "seed:ftc",
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(ch),
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "key_id" {
+		t.Errorf("errors = %+v, want single error on field=key_id", errs)
+	}
+}
+
 // TestVerifyEndpoint_HappyPath_DB exercises the full challenge -> verify ->
 // token flow through the router against the live test DB, asserting a device
 // row is created and the returned token parses to that device_id.

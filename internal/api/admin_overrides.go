@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"spamfilter/internal/phone"
+	"spamfilter/internal/scoring"
 	"spamfilter/internal/store"
 )
 
@@ -89,44 +90,46 @@ func (h *adminOverridesHandler) handleCreate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	phoneNumberID, err := h.writeOverride(r.Context(), e164, body.Mode, body.Reason, admin, now)
+	status, err := h.writeOverride(r.Context(), e164, body.Mode, body.Reason, admin, now)
 	if err != nil {
+		logInternalError(requestID, "save override", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to save override", Code: "internal_error"})
-		return
-	}
-
-	status, err := store.RecomputeNumber(r.Context(), h.db, phoneNumberID, now)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, requestID,
-			APIError{Message: "failed to recompute score", Code: "internal_error"})
 		return
 	}
 
 	WriteSuccess(w, http.StatusOK, overrideResponse{Number: e164, Status: string(status)}, requestID)
 }
 
-// writeOverride persists the phone number and its override in a single
-// transaction, returning the phone_number_id.
-func (h *adminOverridesHandler) writeOverride(ctx context.Context, e164, mode, reason, admin string, now time.Time) (uint64, error) {
+// writeOverride persists the phone number and its override, then recomputes
+// the number's cached score -- all in a single transaction. Recomputing inside
+// the transaction (after UpsertPhoneNumber has taken the phone_numbers row
+// lock) serializes it against concurrent writes to the same number. It returns
+// the number's freshly recomputed status.
+func (h *adminOverridesHandler) writeOverride(ctx context.Context, e164, mode, reason, admin string, now time.Time) (scoring.Status, error) {
 	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	defer tx.Rollback()
 
 	phoneNumberID, err := store.UpsertPhoneNumber(ctx, tx, e164, now)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	if err := store.UpsertOverride(ctx, tx, phoneNumberID, mode, reason, admin, now); err != nil {
-		return 0, err
+		return "", err
+	}
+
+	status, err := store.RecomputeNumber(ctx, tx, phoneNumberID, now)
+	if err != nil {
+		return "", err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return "", err
 	}
 
-	return phoneNumberID, nil
+	return status, nil
 }

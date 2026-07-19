@@ -11,6 +11,16 @@ import (
 // is unknown, already consumed, or expired.
 var ErrChallengeInvalid = errors.New("attest: challenge invalid")
 
+// ErrChallengeStoreFull is returned by Issue when the store is at capacity
+// even after purging expired entries. Failing closed here bounds memory use on
+// the unauthenticated challenge-issuing route.
+var ErrChallengeStoreFull = errors.New("attest: challenge store at capacity")
+
+// maxChallenges caps the number of live challenges the in-memory store will
+// hold, bounding growth from an unauthenticated caller that requests
+// challenges it never consumes.
+const maxChallenges = 100_000
+
 // ChallengeStore issues single-use attestation challenges and consumes them
 // exactly once.
 type ChallengeStore interface {
@@ -38,6 +48,9 @@ func NewMemoryChallengeStore() *MemoryChallengeStore {
 }
 
 // Issue generates 32 random bytes and stores them with the given expiry.
+// Before inserting it opportunistically purges any expired-but-unconsumed
+// entries (a lazy sweep, no background goroutine) and, if still at capacity,
+// fails closed with ErrChallengeStoreFull rather than growing unbounded.
 func (s *MemoryChallengeStore) Issue(now time.Time, ttl time.Duration) ([]byte, error) {
 	ch := make([]byte, 32)
 	if _, err := rand.Read(ch); err != nil {
@@ -45,8 +58,20 @@ func (s *MemoryChallengeStore) Issue(now time.Time, ttl time.Duration) ([]byte, 
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Lazy sweep: drop entries whose expiry has passed.
+	for key, expiry := range s.challenges {
+		if !now.Before(expiry) {
+			delete(s.challenges, key)
+		}
+	}
+
+	if len(s.challenges) >= maxChallenges {
+		return nil, ErrChallengeStoreFull
+	}
+
 	s.challenges[string(ch)] = now.Add(ttl)
-	s.mu.Unlock()
 
 	return ch, nil
 }

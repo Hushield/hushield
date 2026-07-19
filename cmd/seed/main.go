@@ -39,6 +39,15 @@ var defaultNumberColumns = map[string]string{
 	"fcc": "Caller ID Number",
 }
 
+// validSeedCategories is the set of scoring categories a seeded number may be
+// assigned via -category. Validated before any DB connection is opened.
+var validSeedCategories = map[string]bool{
+	string(scoring.CategoryScam):         true,
+	string(scoring.CategoryRobocall):     true,
+	string(scoring.CategoryTelemarketer): true,
+	string(scoring.CategoryOther):        true,
+}
+
 func main() {
 	sourceFlag := flag.String("source", "", `public data source: "ftc" or "fcc" (required)`)
 	fileFlag := flag.String("file", "", "path to the local CSV file to import (required)")
@@ -52,6 +61,9 @@ func main() {
 	}
 	if *fileFlag == "" {
 		log.Fatalf("-file is required")
+	}
+	if !validSeedCategories[*categoryFlag] {
+		log.Fatalf("-category must be one of scam, robocall, telemarketer, other (got %q)", *categoryFlag)
 	}
 
 	numberColumn := *numberColumnFlag

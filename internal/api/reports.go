@@ -104,17 +104,11 @@ func (h *reportsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	phoneNumberID, err := h.writeReport(r.Context(), deviceID, e164, scoring.Category(category), scoring.Vote(vote), name, now)
+	status, err := h.writeReport(r.Context(), deviceID, e164, scoring.Category(category), scoring.Vote(vote), name, now)
 	if err != nil {
+		logInternalError(requestID, "save report", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to save report", Code: "internal_error"})
-		return
-	}
-
-	status, err := store.RecomputeNumber(r.Context(), h.db, phoneNumberID, now)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, requestID,
-			APIError{Message: "failed to recompute score", Code: "internal_error"})
 		return
 	}
 
@@ -122,37 +116,46 @@ func (h *reportsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeReport persists the phone number, report, optional caller name, and
-// device touch in a single transaction, returning the phone_number_id.
-func (h *reportsHandler) writeReport(ctx context.Context, deviceID uint64, e164 string, category scoring.Category, vote scoring.Vote, name string, now time.Time) (uint64, error) {
+// device touch, then recomputes the number's cached score -- all in a single
+// transaction. Recomputing inside the transaction (after UpsertPhoneNumber has
+// taken the phone_numbers row lock) serializes concurrent reports to the same
+// number, so a recompute can never miss a sibling report's write. It returns
+// the number's freshly recomputed status.
+func (h *reportsHandler) writeReport(ctx context.Context, deviceID uint64, e164 string, category scoring.Category, vote scoring.Vote, name string, now time.Time) (scoring.Status, error) {
 	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	defer tx.Rollback()
 
 	phoneNumberID, err := store.UpsertPhoneNumber(ctx, tx, e164, now)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	inserted, err := store.UpsertReport(ctx, tx, deviceID, phoneNumberID, category, vote, now)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	if name != "" {
 		if err := store.UpsertCallerName(ctx, tx, deviceID, phoneNumberID, name, now); err != nil {
-			return 0, err
+			return "", err
 		}
 	}
 
 	if err := store.TouchDevice(ctx, tx, deviceID, inserted, now); err != nil {
-		return 0, err
+		return "", err
+	}
+
+	status, err := store.RecomputeNumber(ctx, tx, phoneNumberID, now)
+	if err != nil {
+		return "", err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return "", err
 	}
 
-	return phoneNumberID, nil
+	return status, nil
 }

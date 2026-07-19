@@ -57,6 +57,7 @@ func (h *blocklistHandler) handleList(w http.ResponseWriter, r *http.Request) {
 
 	entries, nextSec, nextID, err := store.BlocklistDelta(r.Context(), h.db, sinceSec, sinceID, prefix, limit)
 	if err != nil {
+		logInternalError(requestID, "load blocklist", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to load blocklist", Code: "internal_error"})
 		return
