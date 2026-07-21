@@ -26,7 +26,7 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		}
 	}
 
-	const wantMigrations = 2 // 0001_init, 0002_drop_duplicate_number_index
+	const wantMigrations = 3 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count
 
 	var migrationRowCount int
 	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationRowCount); err != nil {
@@ -55,6 +55,17 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 	}
 	if uniqueIndexCount != 1 {
 		t.Errorf("uq_phone_numbers_number count = %d, want 1 (must survive 0002)", uniqueIndexCount)
+	}
+
+	// 0003 must have added the sign_count column to devices.
+	var signCountColCount int
+	if err := sqlDB.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'devices' AND column_name = 'sign_count'",
+	).Scan(&signCountColCount); err != nil {
+		t.Fatalf("failed to check for devices.sign_count column: %v", err)
+	}
+	if signCountColCount != 1 {
+		t.Errorf("devices.sign_count column count = %d, want 1 (must be added by 0003)", signCountColCount)
 	}
 
 	// Second run must be a no-op: no error, no duplicate rows.

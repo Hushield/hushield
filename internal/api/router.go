@@ -29,6 +29,7 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 
 	mux.HandleFunc("POST /api/v1/attest/challenge", attestH.handleChallenge)
 	mux.HandleFunc("POST /api/v1/attest/verify", attestH.handleVerify)
+	mux.HandleFunc("POST /api/v1/attest/assert", attestH.handleAssert)
 
 	// deviceAuth guards routes that require an attested device token. It is
 	// intentionally not applied to the attest routes above.

@@ -73,6 +73,14 @@ type attestStatement struct {
 	Receipt []byte   `cbor:"receipt"`
 }
 
+// assertionObject is the CBOR structure produced by DCAppAttestService's
+// generateAssertion: a raw ECDSA signature over the nonce plus the
+// authenticatorData carrying the rpIdHash and signature counter.
+type assertionObject struct {
+	Signature         []byte `cbor:"signature"`
+	AuthenticatorData []byte `cbor:"authenticatorData"`
+}
+
 // nonceExtension models SEQUENCE { [1] EXPLICIT OCTET STRING } inside the
 // credCert's App Attest extension.
 type nonceExtension struct {
@@ -156,6 +164,58 @@ func (v *AppleVerifier) VerifyAttestation(ctx context.Context, keyID string, att
 		return nil, nil, fmt.Errorf("%w: marshal public key: %v", ErrAttestationInvalid, err)
 	}
 	return pkixDER, obj.AttStmt.Receipt, nil
+}
+
+// VerifyAssertion implements Verifier for App Attest assertions. It fails
+// closed: any deviation from Apple's documented steps returns an error.
+//
+//	authenticatorData layout (assertion): rpIdHash[32] || flags[1] || signCount[4]
+func (v *AppleVerifier) VerifyAssertion(ctx context.Context, publicKeyDER, assertion, clientDataHash []byte, prevCounter uint32) (uint32, error) {
+	// Step 1: CBOR-decode the assertion.
+	var obj assertionObject
+	if err := cbor.Unmarshal(assertion, &obj); err != nil {
+		return 0, fmt.Errorf("%w: cbor decode assertion: %v", ErrAttestationInvalid, err)
+	}
+	if len(obj.Signature) == 0 {
+		return 0, fmt.Errorf("%w: assertion missing signature", ErrAttestationInvalid)
+	}
+
+	// Step 2: compute nonce = SHA256(authenticatorData || clientDataHash).
+	h := sha256.New()
+	h.Write(obj.AuthenticatorData)
+	h.Write(clientDataHash)
+	nonce := h.Sum(nil)
+
+	// Step 3: verify the ECDSA-P256 signature over the nonce using the stored
+	// device public key.
+	pub, err := x509.ParsePKIXPublicKey(publicKeyDER)
+	if err != nil {
+		return 0, fmt.Errorf("%w: parse public key: %v", ErrAttestationInvalid, err)
+	}
+	ecdsaPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return 0, fmt.Errorf("%w: stored public key is not ECDSA", ErrAttestationInvalid)
+	}
+	if !ecdsa.VerifyASN1(ecdsaPub, nonce, obj.Signature) {
+		return 0, fmt.Errorf("%w: assertion signature invalid", ErrAttestationInvalid)
+	}
+
+	// Step 4: parse authenticatorData and assert rpIdHash == SHA256(appID).
+	const authDataMinLen = 32 + 1 + 4
+	if len(obj.AuthenticatorData) < authDataMinLen {
+		return 0, fmt.Errorf("%w: assertion authData too short", ErrAttestationInvalid)
+	}
+	if !bytes.Equal(obj.AuthenticatorData[0:32], v.appHash[:]) {
+		return 0, fmt.Errorf("%w: rpIdHash != SHA256(appID)", ErrAttestationInvalid)
+	}
+
+	// Step 5: enforce a strictly-increasing signature counter (replay guard).
+	newCounter := binary.BigEndian.Uint32(obj.AuthenticatorData[33:37])
+	if newCounter <= prevCounter {
+		return 0, fmt.Errorf("%w: sign counter %d not greater than previous %d", ErrAttestationInvalid, newCounter, prevCounter)
+	}
+
+	return newCounter, nil
 }
 
 func nonceFromCert(cert *x509.Certificate) ([]byte, error) {

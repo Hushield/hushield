@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"spamfilter/internal/attest"
+	"spamfilter/internal/store"
 	"spamfilter/internal/token"
 )
 
@@ -130,6 +132,97 @@ func (h *attestHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 		logInternalError(requestID, "persist device", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to persist device", Code: "internal_error"})
+		return
+	}
+
+	tok := h.signer.Issue(deviceID, h.tokenTTL, now)
+	WriteSuccess(w, http.StatusOK, verifyResponse{
+		DeviceToken: tok,
+		ExpiresAt:   now.Add(h.tokenTTL).UTC().Format(time.RFC3339),
+	}, requestID)
+}
+
+type assertRequest struct {
+	KeyID     string `json:"key_id"`
+	Assertion string `json:"assertion"`
+	Challenge string `json:"challenge"`
+}
+
+// handleAssert refreshes a device token from an App Attest assertion signed by
+// a previously attested key. It consumes the challenge, verifies the assertion
+// (fail-closed, strictly-increasing counter), advances the persisted counter,
+// and issues a fresh device token.
+func (h *attestHandler) handleAssert(w http.ResponseWriter, r *http.Request) {
+	requestID := RequestIDFromContext(r.Context())
+	now := h.clock()
+
+	var body assertRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err := dec.Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, requestID,
+			APIError{Message: "invalid request body", Code: "bad_request"})
+		return
+	}
+
+	if body.KeyID == "" {
+		WriteError(w, http.StatusBadRequest, requestID,
+			APIError{Field: "key_id", Message: "key_id is required", Code: "bad_request"})
+		return
+	}
+	// Reserved "seed:" namespace, same rule as /verify: reject before any work
+	// so a client cannot claim a synthetic seed device's fixed trust_weight.
+	if strings.HasPrefix(body.KeyID, "seed:") {
+		WriteError(w, http.StatusBadRequest, requestID,
+			APIError{Field: "key_id", Message: "key_id is reserved", Code: "bad_request"})
+		return
+	}
+	asrtBytes, err := base64.StdEncoding.DecodeString(body.Assertion)
+	if err != nil || len(asrtBytes) == 0 {
+		WriteError(w, http.StatusBadRequest, requestID,
+			APIError{Field: "assertion", Message: "assertion must be valid base64", Code: "bad_request"})
+		return
+	}
+	chBytes, err := base64.StdEncoding.DecodeString(body.Challenge)
+	if err != nil || len(chBytes) == 0 {
+		WriteError(w, http.StatusBadRequest, requestID,
+			APIError{Field: "challenge", Message: "challenge must be valid base64", Code: "bad_request"})
+		return
+	}
+
+	// Consume the challenge first (single-use, replay-safe).
+	if err := h.store.Consume(chBytes, now); err != nil {
+		WriteError(w, http.StatusUnauthorized, requestID,
+			APIError{Message: "invalid or expired challenge", Code: "unauthorized"})
+		return
+	}
+
+	// The device must have attested a key before it can assert with it.
+	deviceID, pubDER, signCount, err := store.GetDeviceByKeyID(r.Context(), h.db, body.KeyID)
+	if err != nil {
+		if errors.Is(err, store.ErrDeviceNotFound) {
+			WriteError(w, http.StatusUnauthorized, requestID,
+				APIError{Message: "unknown device", Code: "unauthorized"})
+			return
+		}
+		logInternalError(requestID, "lookup device", err)
+		WriteError(w, http.StatusInternalServerError, requestID,
+			APIError{Message: "failed to look up device", Code: "internal_error"})
+		return
+	}
+
+	// Verify the assertion (fails closed, enforces strictly-increasing counter).
+	clientDataHash := sha256.Sum256(chBytes)
+	newCounter, err := h.verifier.VerifyAssertion(r.Context(), pubDER, asrtBytes, clientDataHash[:], signCount)
+	if err != nil {
+		WriteError(w, http.StatusUnauthorized, requestID,
+			APIError{Message: "assertion verification failed", Code: "unauthorized"})
+		return
+	}
+
+	if err := store.UpdateDeviceSignCount(r.Context(), h.db, deviceID, newCounter, now); err != nil {
+		logInternalError(requestID, "update sign count", err)
+		WriteError(w, http.StatusInternalServerError, requestID,
+			APIError{Message: "failed to update device", Code: "internal_error"})
 		return
 	}
 
