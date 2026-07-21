@@ -26,7 +26,7 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		}
 	}
 
-	const wantMigrations = 4 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count, 0004_was_blockable
+	const wantMigrations = 5 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count, 0004_was_blockable, 0005_push_tokens
 
 	var migrationRowCount int
 	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationRowCount); err != nil {
@@ -77,6 +77,20 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 	}
 	if wasBlockableColCount != 1 {
 		t.Errorf("phone_numbers.was_blockable column count = %d, want 1 (must be added by 0004)", wasBlockableColCount)
+	}
+
+	// 0005 must have added the three push columns to devices.
+	for _, col := range []string{"push_token", "push_environment", "push_updated_at"} {
+		var pushColCount int
+		if err := sqlDB.QueryRow(
+			"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'devices' AND column_name = ?",
+			col,
+		).Scan(&pushColCount); err != nil {
+			t.Fatalf("failed to check for devices.%s column: %v", col, err)
+		}
+		if pushColCount != 1 {
+			t.Errorf("devices.%s column count = %d, want 1 (must be added by 0005)", col, pushColCount)
+		}
 	}
 
 	// Second run must be a no-op: no error, no duplicate rows.

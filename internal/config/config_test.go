@@ -48,6 +48,34 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.ChallengeTTL != 5*time.Minute {
 		t.Errorf("ChallengeTTL = %v, want 5m", cfg.ChallengeTTL)
 	}
+	if cfg.APNSKeyPath != "" || cfg.APNSKeyID != "" || cfg.APNSTeamID != "" || cfg.APNSTopic != "" {
+		t.Errorf("APNs fields should default empty, got path=%q id=%q team=%q topic=%q",
+			cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
+	}
+}
+
+func TestLoad_APNSOverrides(t *testing.T) {
+	t.Setenv("APNS_KEY_PATH", "/etc/apns/AuthKey.p8")
+	t.Setenv("APNS_KEY_ID", "ABC123KEY")
+	t.Setenv("APNS_TEAM_ID", "TEAM456789")
+	t.Setenv("APNS_TOPIC", "com.example.spamfilter")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.APNSKeyPath != "/etc/apns/AuthKey.p8" {
+		t.Errorf("APNSKeyPath = %q, want override", cfg.APNSKeyPath)
+	}
+	if cfg.APNSKeyID != "ABC123KEY" {
+		t.Errorf("APNSKeyID = %q, want ABC123KEY", cfg.APNSKeyID)
+	}
+	if cfg.APNSTeamID != "TEAM456789" {
+		t.Errorf("APNSTeamID = %q, want TEAM456789", cfg.APNSTeamID)
+	}
+	if cfg.APNSTopic != "com.example.spamfilter" {
+		t.Errorf("APNSTopic = %q, want com.example.spamfilter", cfg.APNSTopic)
+	}
 }
 
 func TestLoad_AttestOverrides(t *testing.T) {

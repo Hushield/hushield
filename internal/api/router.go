@@ -44,6 +44,9 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 	numbersH := &numbersHandler{db: db}
 	mux.Handle("GET /api/v1/numbers/{e164}", deviceAuth.RequireDevice(http.HandlerFunc(numbersH.handleGet)))
 
+	pushTokenH := &pushTokenHandler{db: db}
+	mux.Handle("POST /api/v1/devices/push-token", deviceAuth.RequireDevice(http.HandlerFunc(pushTokenH.handleRegister)))
+
 	// adminAuth guards the admin override route with a static bearer token,
 	// independent of device attestation.
 	adminAuth := NewAdminAuth(cfg.AdminToken)
