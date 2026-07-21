@@ -317,6 +317,80 @@ func TestRecomputeNumber_WasBlockableStickyFlag(t *testing.T) {
 	}
 }
 
+func TestRecomputeNumber_NoOpDoesNotBumpUpdatedAt(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	number := "+14155550008"
+	phoneNumberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+
+	// Drive it blocked, then flip all votes to not_spam so it falls back to
+	// unknown with a clamped cached_score of 0 and was_blockable=1 -- i.e. a
+	// removal tombstone that lands in the blocklist delta. A clamped-0 score is
+	// stable under a later `now` (further decay of an already-clamped score is
+	// still 0), so a subsequent recompute is a genuine no-op even as the clock
+	// advances -- exactly the RecomputeAll situation.
+	devices := make([]uint64, 0, 3)
+	for _, keyID := range []string{"noop-device-1", "noop-device-2", "noop-device-3"} {
+		deviceID := insertDevice(t, sqlDB, keyID, 1.0)
+		devices = append(devices, deviceID)
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, phoneNumberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+			t.Fatalf("UpsertReport: %v", err)
+		}
+	}
+	if _, err := RecomputeNumber(ctx, sqlDB, phoneNumberID, now); err != nil {
+		t.Fatalf("RecomputeNumber (blocked): %v", err)
+	}
+	for _, deviceID := range devices {
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, phoneNumberID, scoring.CategoryScam, scoring.VoteNotSpam, now); err != nil {
+			t.Fatalf("UpsertReport (not_spam): %v", err)
+		}
+	}
+	if _, err := RecomputeNumber(ctx, sqlDB, phoneNumberID, now); err != nil {
+		t.Fatalf("RecomputeNumber (first): %v", err)
+	}
+
+	var updatedAt1 time.Time
+	if err := sqlDB.QueryRow("SELECT updated_at FROM phone_numbers WHERE phone_number_id = ?", phoneNumberID).Scan(&updatedAt1); err != nil {
+		t.Fatalf("select updated_at (after first): %v", err)
+	}
+
+	// Capture the cursor after the first recompute.
+	_, nextSec, nextID, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (initial): %v", err)
+	}
+
+	// A second recompute with no intervening report must NOT re-stamp
+	// updated_at: nothing tracked changed, so the UPDATE is skipped. Use a
+	// strictly-later now to prove it isn't merely coincidental equality.
+	if _, err := RecomputeNumber(ctx, sqlDB, phoneNumberID, now.Add(time.Hour)); err != nil {
+		t.Fatalf("RecomputeNumber (no-op): %v", err)
+	}
+
+	var updatedAt2 time.Time
+	if err := sqlDB.QueryRow("SELECT updated_at FROM phone_numbers WHERE phone_number_id = ?", phoneNumberID).Scan(&updatedAt2); err != nil {
+		t.Fatalf("select updated_at (after no-op): %v", err)
+	}
+	if !updatedAt1.Equal(updatedAt2) {
+		t.Errorf("updated_at changed on a no-op recompute: before=%v after=%v", updatedAt1, updatedAt2)
+	}
+
+	// And an incremental client at the post-first-recompute cursor sees nothing
+	// after the no-op recompute -- the delta stays empty.
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, nextSec, nextID, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (since cursor): %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("delta since cursor returned %d entries after a no-op recompute, want 0", len(entries))
+	}
+}
+
 func TestRecomputeNumber_OverrideBlock(t *testing.T) {
 	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()

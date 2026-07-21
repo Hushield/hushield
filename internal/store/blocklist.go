@@ -138,11 +138,17 @@ func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uin
 		}
 	}
 
-	// The removal sub-query's status set (unknown, allowlisted) is disjoint
-	// from the base/spoof sets' (blocked, overridden_block, suspected /
-	// unknown-with-signal), so a genuine collision should never happen. Still
-	// dedupe defensively by phone_number_id: if one ever occurs, the
-	// base/spoof (block/label) entry wins over the removal entry.
+	// The removal sub-query's status set (unknown, allowlisted) is NOT disjoint
+	// from the spoof set: a spoof candidate is status='unknown', which the
+	// removal query's status IN ('unknown','allowlisted') also matches. So a
+	// once-blockable number now sitting at status=unknown, cached_score>0 whose
+	// number matches the caller's prefix qualifies as BOTH a spoof label and a
+	// removal tombstone. Precedence on that overlap: the base/spoof entry wins.
+	// The dedupe below enforces it -- a phone_number_id already present (from
+	// the base or spoof pass) is not overwritten by its removal row, so the
+	// number surfaces once as its spoof "label", never as a duplicate
+	// "unblock". (The base set's statuses -- blocked, overridden_block,
+	// suspected -- remain genuinely disjoint from the removal set.)
 	removalRows, err := queryBlocklistRows(ctx, db, blocklistRemovalQuery, sinceSec, sinceSec, sinceID, limit)
 	if err != nil {
 		return nil, 0, 0, err

@@ -795,3 +795,100 @@ func TestBlocklistDelta_MalformedPrefixSkipsSpoofQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestBlocklistDelta_SpoofRemovalOverlapPrefersSpoof pins the precedence when a
+// number qualifies for BOTH the spoof set and the removal set. A once-blockable
+// number (was_blockable=1) that has walked back to status=unknown with a
+// residual cached_score>0 and whose number matches the caller's prefix is a
+// spoof "label" candidate AND a removal "unblock" tombstone simultaneously (the
+// removal query's status IN ('unknown','allowlisted') overlaps the spoof
+// query's status='unknown'). When queried WITH the matching prefix it must
+// appear exactly once, as the spoof "label" (base/spoof wins), never as a
+// duplicate "unblock".
+func TestBlocklistDelta_SpoofRemovalOverlapPrefersSpoof(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	number := "+14155559301"
+	prefix := "415555"
+	numberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+
+	device1 := insertDevice(t, sqlDB, "overlap-device-1", 1.0)
+	device2 := insertDevice(t, sqlDB, "overlap-device-2", 1.0)
+	device3 := insertDevice(t, sqlDB, "overlap-device-3", 1.0)
+
+	// Phase 1: three scam reports drive it blocked, setting was_blockable=1.
+	for _, deviceID := range []uint64{device1, device2, device3} {
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+			t.Fatalf("UpsertReport (scam): %v", err)
+		}
+	}
+	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	if err != nil {
+		t.Fatalf("RecomputeNumber (blocked): %v", err)
+	}
+	if status != scoring.StatusBlocked {
+		t.Fatalf("phase 1 status = %s, want %s", status, scoring.StatusBlocked)
+	}
+
+	// Phase 2: walk back to unknown with a residual score in (0, 2). Two
+	// CategoryOther spam (0.75 each = 1.5) minus one not_spam (1.0) = 0.5:
+	// below SuspectThreshold (unknown) but strictly above 0, so it remains a
+	// spoof candidate. was_blockable stays 1 (sticky), so it's also a removal
+	// tombstone -- the overlap this test targets.
+	if _, err := UpsertReport(ctx, sqlDB, device1, numberID, scoring.CategoryOther, scoring.VoteSpam, now); err != nil {
+		t.Fatalf("UpsertReport (other spam 1): %v", err)
+	}
+	if _, err := UpsertReport(ctx, sqlDB, device2, numberID, scoring.CategoryOther, scoring.VoteSpam, now); err != nil {
+		t.Fatalf("UpsertReport (other spam 2): %v", err)
+	}
+	if _, err := UpsertReport(ctx, sqlDB, device3, numberID, scoring.CategoryOther, scoring.VoteNotSpam, now); err != nil {
+		t.Fatalf("UpsertReport (not_spam): %v", err)
+	}
+	status, err = RecomputeNumber(ctx, sqlDB, numberID, now)
+	if err != nil {
+		t.Fatalf("RecomputeNumber (walk back): %v", err)
+	}
+	if status != scoring.StatusUnknown {
+		t.Fatalf("phase 2 status = %s, want %s", status, scoring.StatusUnknown)
+	}
+
+	// Confirm the row genuinely overlaps both sets: was_blockable=1 AND
+	// cached_score>0 AND status=unknown.
+	var wasBlockable bool
+	var cachedScore float64
+	if err := sqlDB.QueryRow("SELECT was_blockable, cached_score FROM phone_numbers WHERE phone_number_id = ?", numberID).Scan(&wasBlockable, &cachedScore); err != nil {
+		t.Fatalf("select was_blockable/cached_score: %v", err)
+	}
+	if !wasBlockable || cachedScore <= 0 {
+		t.Fatalf("precondition not met: was_blockable=%v cached_score=%v, want true and >0", wasBlockable, cachedScore)
+	}
+
+	// Queried WITH the matching prefix: exactly one entry, a spoof "label",
+	// never a duplicate "unblock".
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, prefix, 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (with prefix): %v", err)
+	}
+	var count int
+	var found BlocklistEntry
+	for _, e := range entries {
+		if e.Number == number {
+			count++
+			found = e
+		}
+	}
+	if count != 1 {
+		t.Fatalf("entries for %q = %d, want exactly 1 (no spoof/removal duplicate)", number, count)
+	}
+	if found.Action != "label" {
+		t.Errorf("action = %q, want %q (spoof base wins over removal on overlap)", found.Action, "label")
+	}
+	if !found.SpoofSuspected {
+		t.Errorf("SpoofSuspected = false, want true (surfaced as the spoof entry)")
+	}
+}

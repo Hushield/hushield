@@ -12,6 +12,15 @@ import (
 // numbersHandler serves GET /api/v1/numbers/{e164}: an on-demand reputation
 // lookup for a single number (the iOS SMS filter's optional network path and
 // a future web reverse-lookup). It must run behind RequireDevice.
+//
+// Spoof divergence from /blocklist (client-contract note): for a
+// status=unknown, cached_score>0 number that matches the caller's own NPA-NXX
+// prefix, the two endpoints report the neighbor-spoof signal differently. The
+// /blocklist delta bakes the spoof bonus into the entry itself, surfacing it
+// as action:"label". /numbers does NOT fold the bonus into action -- it
+// returns action derived from the raw stored status (so "none" for unknown)
+// PLUS spoof_suspected:true. Clients calling /numbers must therefore treat
+// spoof_suspected as a label signal in its own right, not rely on action.
 type numbersHandler struct {
 	db *sql.DB
 }

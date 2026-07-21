@@ -36,6 +36,19 @@ func TestBroadcastRefresh_TalliesAndContinues(t *testing.T) {
 	if got := ok.Calls(); len(got) != 3 || got[0].DeviceID != 1 || got[2].DeviceID != 3 {
 		t.Errorf("ok broadcast recorded %+v, want the three targets in order", got)
 	}
+
+	// A MIXED batch: device 2 fails, devices 1 and 3 succeed. The tallies must
+	// be exact (sent=2, failed=1) and -- critically -- ALL three targets must
+	// have been attempted, proving a mid-batch failure does not abort the run.
+	mixed := &MockNotifier{FailFor: map[uint64]bool{2: true}}
+	sent, failed = BroadcastRefresh(ctx, mixed, targets)
+	if sent != 2 || failed != 1 {
+		t.Errorf("mixed broadcast: sent=%d failed=%d, want 2/1", sent, failed)
+	}
+	got := mixed.Calls()
+	if len(got) != 3 || got[0].DeviceID != 1 || got[1].DeviceID != 2 || got[2].DeviceID != 3 {
+		t.Errorf("mixed broadcast recorded %+v, want all three targets in order (not aborted at the failure)", got)
+	}
 }
 
 func TestNoopNotifier_ReturnsNil(t *testing.T) {

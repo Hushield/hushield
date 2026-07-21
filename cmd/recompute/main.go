@@ -53,16 +53,23 @@ func main() {
 	// silent push. This is a simple broadcast-to-all: every device with a
 	// registered token gets pinged regardless of whether its own blocklist
 	// actually changed. Per-device relevance targeting is deferred to Spec 4.
-	notifier, realAPNs, err := push.NewNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
-	if err != nil {
-		log.Fatalf("building push notifier: %v", err)
-	}
-	if *notify && realAPNs {
-		targets, err := store.ListPushTargets(ctx, sqlDB)
+	//
+	// The entire notifier build + broadcast is guarded by -notify so a
+	// push-only misconfig (e.g. APNS_KEY_PATH set but unreadable/malformed,
+	// which makes NewNotifier fatal) can never fail a recompute that already
+	// succeeded. When -notify is off we simply skip pushing.
+	if *notify {
+		notifier, realAPNs, err := push.NewNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
 		if err != nil {
-			log.Fatalf("listing push targets: %v", err)
+			log.Fatalf("building push notifier: %v", err)
 		}
-		sent, failed := push.BroadcastRefresh(ctx, notifier, targets)
-		log.Printf("pushed sent=%d failed=%d targets=%d", sent, failed, len(targets))
+		if realAPNs {
+			targets, err := store.ListPushTargets(ctx, sqlDB)
+			if err != nil {
+				log.Fatalf("listing push targets: %v", err)
+			}
+			sent, failed := push.BroadcastRefresh(ctx, notifier, targets)
+			log.Printf("pushed sent=%d failed=%d targets=%d", sent, failed, len(targets))
+		}
 	}
 }
