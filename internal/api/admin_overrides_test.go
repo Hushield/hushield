@@ -111,15 +111,24 @@ func TestAdminOverridesEndpoint_AllowWinsOverCommunityBlock_DB(t *testing.T) {
 	}
 
 	// An allowlisted number must never appear in the blocklist delta as a
-	// block or label entry.
+	// block or label entry -- but since it was previously blocked, it must
+	// appear as an action:"unblock" removal tombstone, so an incremental
+	// client that already blocked it learns to remove it.
 	entries, _, _, err := store.BlocklistDelta(ctx, database, 0, 0, "", 500)
 	if err != nil {
 		t.Fatalf("BlocklistDelta: %v", err)
 	}
-	for _, e := range entries {
-		if e.Number == number {
-			t.Errorf("allowlisted number %q unexpectedly present in BlocklistDelta: %+v", number, e)
+	var found *store.BlocklistEntry
+	for i := range entries {
+		if entries[i].Number == number {
+			found = &entries[i]
 		}
+	}
+	if found == nil {
+		t.Fatalf("allowlisted number %q missing from BlocklistDelta, want an unblock tombstone", number)
+	}
+	if found.Action != "unblock" {
+		t.Errorf("allowlisted number %q action = %q, want %q", number, found.Action, "unblock")
 	}
 }
 

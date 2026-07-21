@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,11 +18,19 @@ import (
 	"spamfilter/internal/token"
 )
 
+// testSeq is a process-wide monotonic counter used to make test helper
+// identifiers (phone numbers, device key_ids) collision-free. A clock-based
+// scheme (time.Now().UnixNano()) can repeat on close or repeated calls,
+// which caused intermittent duplicate-key flakes; an atomic counter guarantees
+// every call gets a distinct value.
+var testSeq uint64
+
 // uniquePhoneNumber returns a syntactically valid NANP E.164 number that is
-// (with overwhelming probability) unused by any other test run, so tests
-// don't need to truncate shared tables between runs.
+// unique within this test process, so tests don't need to truncate shared
+// tables between runs. The 4-digit line number is drawn from a monotonic
+// counter (mod 10000), keeping the number in the valid +1415555XXXX range.
 func uniquePhoneNumber() string {
-	n := time.Now().UnixNano() % 10000
+	n := atomic.AddUint64(&testSeq, 1) % 10000
 	return fmt.Sprintf("+1415555%04d", n)
 }
 
@@ -29,7 +38,7 @@ func uniquePhoneNumber() string {
 // returns its device_id and a bearer token authenticating it.
 func mintDeviceToken(t *testing.T, database *sql.DB, signer *token.Signer, trustWeight float64) (uint64, string) {
 	t.Helper()
-	keyID := fmt.Sprintf("reports-device-%d", time.Now().UnixNano())
+	keyID := fmt.Sprintf("reports-device-%d", atomic.AddUint64(&testSeq, 1))
 	res, err := database.Exec(
 		"INSERT INTO devices (key_id, public_key, trust_weight) VALUES (?, ?, ?)",
 		keyID, []byte("pubkey-"+keyID), trustWeight,

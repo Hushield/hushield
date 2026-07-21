@@ -84,8 +84,12 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 	}
 
 	entries = e2eBlocklist(t, client, base, tokens[0], "since=0")
-	if entry, ok := e2eFindEntry(entries, numberA); ok {
-		t.Errorf("numberA %q still present after counter-reports (score should be floored to 0, status unknown, below suspect threshold): %+v", numberA, entry)
+	entryA, ok = e2eFindEntry(entries, numberA)
+	if !ok {
+		t.Fatalf("numberA %q missing after counter-reports, want an unblock tombstone (it was previously blocked)", numberA)
+	}
+	if entryA.Action != "unblock" {
+		t.Errorf("numberA action = %q, want %q (score floored to 0, status unknown, below suspect threshold, but was previously blockable)", entryA.Action, "unblock")
 	}
 
 	// --- 4 & 5. Two devices report numberB with a caller name, driving it to
@@ -140,8 +144,12 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 	}
 
 	entries = e2eBlocklist(t, client, base, tokens[0], "since=0")
-	if entry, ok := e2eFindEntry(entries, numberA); ok {
-		t.Errorf("numberA %q present after allow override, want absent (allowlisted): %+v", numberA, entry)
+	entryA, ok = e2eFindEntry(entries, numberA)
+	if !ok {
+		t.Fatalf("numberA %q missing after allow override, want an unblock tombstone (allowlisted, previously blockable)", numberA)
+	}
+	if entryA.Action != "unblock" {
+		t.Errorf("numberA action = %q, want %q (allowlisted after admin override)", entryA.Action, "unblock")
 	}
 
 	numberC := "+14085551234"

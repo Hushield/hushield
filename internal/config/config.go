@@ -30,6 +30,19 @@ type Config struct {
 	DeviceTokenTTL time.Duration
 	// ChallengeTTL is how long an issued attestation challenge remains valid.
 	ChallengeTTL time.Duration
+
+	// APNSKeyPath is the filesystem path to the Apple token-based auth key
+	// (.p8, PKCS8 EC private key). When empty, silent-push is disabled and a
+	// NoopNotifier is used (fail-safe).
+	APNSKeyPath string
+	// APNSKeyID is the Key ID of the APNs auth key (APNS_KEY_ID).
+	APNSKeyID string
+	// APNSTeamID is the Apple Team ID used as the provider JWT issuer
+	// (APNS_TEAM_ID).
+	APNSTeamID string
+	// APNSTopic is the app bundle id sent as the apns-topic header
+	// (APNS_TOPIC).
+	APNSTopic string
 }
 
 const (
@@ -66,6 +79,10 @@ func Load() (Config, error) {
 		DeviceTokenSecretIsDefault: secretIsDefault,
 		DeviceTokenTTL:             getEnvDuration("DEVICE_TOKEN_TTL", defaultDeviceTokenTTL),
 		ChallengeTTL:               getEnvDuration("CHALLENGE_TTL", defaultChallengeTTL),
+		APNSKeyPath:                getEnv("APNS_KEY_PATH", ""),
+		APNSKeyID:                  getEnv("APNS_KEY_ID", ""),
+		APNSTeamID:                 getEnv("APNS_TEAM_ID", ""),
+		APNSTopic:                  getEnv("APNS_TOPIC", ""),
 	}
 
 	if cfg.AttestMode == "apple" && cfg.AppID == "" {

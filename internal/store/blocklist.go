@@ -83,6 +83,20 @@ WHERE phone_numbers.number LIKE ?
   AND ` + keysetPredicate + `
 ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?`
 
+// blocklistRemovalQuery finds numbers that were once blockable
+// (was_blockable = 1, the sticky flag RecomputeNumber sets) and have since
+// fallen back to a non-blockable status (unknown, e.g. after enough
+// not_spam votes; or allowlisted, e.g. after an admin allow override). These
+// rows become action:"unblock" tombstones: without them, a number that
+// leaves the blockable set would simply vanish from future deltas, leaving
+// an incremental client with no way to learn it should un-block it. Always
+// run, independent of prefix -- a removal is not a neighbor-spoof concept.
+const blocklistRemovalQuery = `SELECT phone_numbers.phone_number_id, phone_numbers.number, phone_numbers.status, phone_numbers.updated_at, UNIX_TIMESTAMP(phone_numbers.updated_at) FROM phone_numbers
+WHERE phone_numbers.was_blockable = 1
+  AND phone_numbers.status IN ('unknown','allowlisted')
+  AND ` + keysetPredicate + `
+ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?`
+
 // BlocklistDelta returns the numbers a device should block or label that
 // changed since the compound cursor (sinceSec, sinceID) -- (0, 0) for a full
 // snapshot -- optionally widened by prefix (the caller's own 6-digit
@@ -124,16 +138,41 @@ func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uin
 		}
 	}
 
+	// The removal sub-query's status set (unknown, allowlisted) is NOT disjoint
+	// from the spoof set: a spoof candidate is status='unknown', which the
+	// removal query's status IN ('unknown','allowlisted') also matches. So a
+	// once-blockable number now sitting at status=unknown, cached_score>0 whose
+	// number matches the caller's prefix qualifies as BOTH a spoof label and a
+	// removal tombstone. Precedence on that overlap: the base/spoof entry wins.
+	// The dedupe below enforces it -- a phone_number_id already present (from
+	// the base or spoof pass) is not overwritten by its removal row, so the
+	// number surfaces once as its spoof "label", never as a duplicate
+	// "unblock". (The base set's statuses -- blocked, overridden_block,
+	// suspected -- remain genuinely disjoint from the removal set.)
+	removalRows, err := queryBlocklistRows(ctx, db, blocklistRemovalQuery, sinceSec, sinceSec, sinceID, limit)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	removalIDs := make(map[uint64]bool, len(removalRows))
+	for _, row := range removalRows {
+		if _, exists := byID[row.phoneNumberID]; exists {
+			continue
+		}
+		byID[row.phoneNumberID] = row
+		removalIDs[row.phoneNumberID] = true
+	}
+
 	if len(byID) == 0 {
 		return []BlocklistEntry{}, sinceSec, sinceID, nil
 	}
 
-	// The base and spoof result sets are each individually ordered by the
-	// DB, but merging them (and deduping) does not preserve a combined
-	// order, and each was independently limited so the merged set can hold
-	// up to 2x limit rows. Re-sort by the same (updated_at, phone_number_id)
-	// key and truncate to limit so the page boundary -- and thus
-	// nextCursor -- is correct for the merged result, not just one source.
+	// The base, spoof, and removal result sets (the keyset k-way merge's
+	// three sources) are each individually ordered by the DB, but merging
+	// them (and deduping) does not preserve a combined order, and each was
+	// independently limited so the merged set can hold up to 3x limit rows.
+	// Re-sort by the same (updated_at, phone_number_id) key and truncate to
+	// limit so the page boundary -- and thus nextCursor -- is correct for
+	// the merged result, not just one source.
 	merged := make([]blocklistRow, 0, len(byID))
 	for _, row := range byID {
 		merged = append(merged, row)
@@ -148,9 +187,14 @@ func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uin
 		merged = merged[:limit]
 	}
 
-	ids := make([]uint64, len(merged))
-	for i, row := range merged {
-		ids[i] = row.phoneNumberID
+	// Removal (unblock) entries carry no community caller-ID name -- a
+	// removal is a removal -- so only non-removal ids need the name lookup.
+	ids := make([]uint64, 0, len(merged))
+	for _, row := range merged {
+		if removalIDs[row.phoneNumberID] {
+			continue
+		}
+		ids = append(ids, row.phoneNumberID)
 	}
 
 	names, err := lookupTopNames(ctx, db, ids)
@@ -160,6 +204,18 @@ func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uin
 
 	entries := make([]BlocklistEntry, 0, len(merged))
 	for _, row := range merged {
+		if removalIDs[row.phoneNumberID] {
+			entries = append(entries, BlocklistEntry{
+				Number:         row.number,
+				Status:         row.status,
+				Action:         "unblock",
+				Name:           nil,
+				SpoofSuspected: false,
+				UpdatedAt:      row.updatedAt,
+			})
+			continue
+		}
+
 		action := "label"
 		if row.status == scoring.StatusBlocked || row.status == scoring.StatusOverriddenBlock {
 			action = "block"
@@ -229,6 +285,12 @@ func queryBlocklistRows(ctx context.Context, db *sql.DB, query string, args ...a
 // in a single query. Ties on report count are broken by the lexicographically
 // smallest name, for a deterministic result.
 func lookupTopNames(ctx context.Context, db *sql.DB, ids []uint64) (map[uint64]string, error) {
+	if len(ids) == 0 {
+		// A page made up entirely of removal (unblock) rows has no ids left
+		// to look up -- an "IN ()" clause is invalid SQL, so short-circuit.
+		return map[uint64]string{}, nil
+	}
+
 	placeholders := make([]string, len(ids))
 	args := make([]any, 0, len(ids)+1)
 	for i, id := range ids {

@@ -29,6 +29,7 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 
 	mux.HandleFunc("POST /api/v1/attest/challenge", attestH.handleChallenge)
 	mux.HandleFunc("POST /api/v1/attest/verify", attestH.handleVerify)
+	mux.HandleFunc("POST /api/v1/attest/assert", attestH.handleAssert)
 
 	// deviceAuth guards routes that require an attested device token. It is
 	// intentionally not applied to the attest routes above.
@@ -39,6 +40,12 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 
 	blocklistH := &blocklistHandler{db: db}
 	mux.Handle("GET /api/v1/blocklist", deviceAuth.RequireDevice(http.HandlerFunc(blocklistH.handleList)))
+
+	numbersH := &numbersHandler{db: db}
+	mux.Handle("GET /api/v1/numbers/{e164}", deviceAuth.RequireDevice(http.HandlerFunc(numbersH.handleGet)))
+
+	pushTokenH := &pushTokenHandler{db: db}
+	mux.Handle("POST /api/v1/devices/push-token", deviceAuth.RequireDevice(http.HandlerFunc(pushTokenH.handleRegister)))
 
 	// adminAuth guards the admin override route with a static bearer token,
 	// independent of device attestation.

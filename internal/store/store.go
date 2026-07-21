@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"time"
 
 	"spamfilter/internal/scoring"
@@ -161,10 +162,71 @@ WHERE reports.phone_number_id = ?`
 		topCategory = string(res.TopCategory)
 	}
 
+	// was_blockable is a sticky tombstone flag consumed by BlocklistDelta's
+	// removal sub-query: once a number has ever reached a blockable status
+	// (blocked, suspected, overridden_block) it must stay flagged forever,
+	// even after later falling back to unknown/allowlisted, so that fallback
+	// can be surfaced as an action:"unblock" removal. GREATEST(was_blockable, ?)
+	// only ever raises the stored value (0->1); it never lowers a 1 back to 0.
+	wasBlockableNow := 0
+	if res.Status == scoring.StatusBlocked || res.Status == scoring.StatusSuspected || res.Status == scoring.StatusOverriddenBlock {
+		wasBlockableNow = 1
+	}
+
+	// Load the currently-cached tracked values so we can skip the UPDATE when
+	// nothing actually changed. The UPDATE's updated_at column carries
+	// ON UPDATE CURRENT_TIMESTAMP, so re-running it re-stamps updated_at even
+	// for an identical result -- which would make every 15-min RecomputeAll
+	// re-surface every row in the /blocklist keyset delta, defeating the delta
+	// design. Only writing on a real change keeps updated_at (and the cursor)
+	// stable across no-op recomputes.
+	const currentQuery = `SELECT phone_numbers.status, phone_numbers.cached_score, phone_numbers.top_category, phone_numbers.report_count, phone_numbers.counter_count, phone_numbers.was_blockable
+FROM phone_numbers
+WHERE phone_numbers.phone_number_id = ?`
+	var (
+		curStatus                  string
+		curScore                   float64
+		curTopCategory             sql.NullString
+		curReportCount, curCounter uint64
+		curWasBlockable            int
+		haveCurrent                = true
+	)
+	if err := exec.QueryRowContext(ctx, currentQuery, phoneNumberID).Scan(
+		&curStatus, &curScore, &curTopCategory, &curReportCount, &curCounter, &curWasBlockable,
+	); err != nil {
+		if err != sql.ErrNoRows {
+			return "", err
+		}
+		haveCurrent = false
+	}
+
+	// Compare cached_score at the STORED precision (DECIMAL(10,4)): format both
+	// the freshly-computed float and the value read back from the DB to 4
+	// decimals before comparing, so float jitter can't register a spurious
+	// "changed" and re-stamp the row on every pass. top_category is compared as
+	// a nullable. was_blockable only ever "changes" on a 0->1 raise (the flag
+	// is sticky and never lowers 1->0).
+	newTopCategoryValid := res.TopCategory != ""
+	newTopCategory := string(res.TopCategory)
+	changed := !haveCurrent ||
+		curStatus != string(res.Status) ||
+		strconv.FormatFloat(curScore, 'f', 4, 64) != strconv.FormatFloat(res.Score, 'f', 4, 64) ||
+		curTopCategory.Valid != newTopCategoryValid ||
+		(newTopCategoryValid && curTopCategory.String != newTopCategory) ||
+		curReportCount != reportCount ||
+		curCounter != counterCount ||
+		(wasBlockableNow == 1 && curWasBlockable == 0)
+
+	if !changed {
+		// Nothing tracked changed: skip the UPDATE entirely so updated_at (and
+		// thus the blocklist cursor) stays untouched.
+		return res.Status, nil
+	}
+
 	const updateQuery = `UPDATE phone_numbers
-SET cached_score = ?, status = ?, top_category = ?, report_count = ?, counter_count = ?, updated_at = ?
+SET cached_score = ?, status = ?, top_category = ?, report_count = ?, counter_count = ?, updated_at = ?, was_blockable = GREATEST(was_blockable, ?)
 WHERE phone_number_id = ?`
-	if _, err := exec.ExecContext(ctx, updateQuery, res.Score, string(res.Status), topCategory, reportCount, counterCount, now.UTC(), phoneNumberID); err != nil {
+	if _, err := exec.ExecContext(ctx, updateQuery, res.Score, string(res.Status), topCategory, reportCount, counterCount, now.UTC(), wasBlockableNow, phoneNumberID); err != nil {
 		return "", err
 	}
 
