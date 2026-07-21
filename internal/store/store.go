@@ -161,10 +161,21 @@ WHERE reports.phone_number_id = ?`
 		topCategory = string(res.TopCategory)
 	}
 
+	// was_blockable is a sticky tombstone flag consumed by BlocklistDelta's
+	// removal sub-query: once a number has ever reached a blockable status
+	// (blocked, suspected, overridden_block) it must stay flagged forever,
+	// even after later falling back to unknown/allowlisted, so that fallback
+	// can be surfaced as an action:"unblock" removal. GREATEST(was_blockable, ?)
+	// only ever raises the stored value (0->1); it never lowers a 1 back to 0.
+	wasBlockableNow := 0
+	if res.Status == scoring.StatusBlocked || res.Status == scoring.StatusSuspected || res.Status == scoring.StatusOverriddenBlock {
+		wasBlockableNow = 1
+	}
+
 	const updateQuery = `UPDATE phone_numbers
-SET cached_score = ?, status = ?, top_category = ?, report_count = ?, counter_count = ?, updated_at = ?
+SET cached_score = ?, status = ?, top_category = ?, report_count = ?, counter_count = ?, updated_at = ?, was_blockable = GREATEST(was_blockable, ?)
 WHERE phone_number_id = ?`
-	if _, err := exec.ExecContext(ctx, updateQuery, res.Score, string(res.Status), topCategory, reportCount, counterCount, now.UTC(), phoneNumberID); err != nil {
+	if _, err := exec.ExecContext(ctx, updateQuery, res.Score, string(res.Status), topCategory, reportCount, counterCount, now.UTC(), wasBlockableNow, phoneNumberID); err != nil {
 		return "", err
 	}
 

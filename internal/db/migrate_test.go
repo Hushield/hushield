@@ -26,7 +26,7 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		}
 	}
 
-	const wantMigrations = 3 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count
+	const wantMigrations = 4 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count, 0004_was_blockable
 
 	var migrationRowCount int
 	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationRowCount); err != nil {
@@ -66,6 +66,17 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 	}
 	if signCountColCount != 1 {
 		t.Errorf("devices.sign_count column count = %d, want 1 (must be added by 0003)", signCountColCount)
+	}
+
+	// 0004 must have added the was_blockable column to phone_numbers.
+	var wasBlockableColCount int
+	if err := sqlDB.QueryRow(
+		"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'phone_numbers' AND column_name = 'was_blockable'",
+	).Scan(&wasBlockableColCount); err != nil {
+		t.Fatalf("failed to check for phone_numbers.was_blockable column: %v", err)
+	}
+	if wasBlockableColCount != 1 {
+		t.Errorf("phone_numbers.was_blockable column count = %d, want 1 (must be added by 0004)", wasBlockableColCount)
 	}
 
 	// Second run must be a no-op: no error, no duplicate rows.

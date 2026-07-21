@@ -353,12 +353,20 @@ func TestBlocklistDelta_EmptyResultEchoesSince(t *testing.T) {
 // that second, and the next call's "> cursor" filter permanently skips the
 // rows that shared it. This test fails against that old behavior and passes
 // with the compound (sec, id) keyset cursor.
+//
+// It also covers the third (removal) keyset source added for
+// action:"unblock" tombstones: two of the numbers below are walked from
+// blocked back to unknown within the SAME updated_at second as the four
+// still-blocked numbers, so the base and removal sub-queries both contend
+// for the same (sec, id) boundary. The merge across all three sources must
+// stay drop-free and dup-free: every number appears in exactly one page,
+// exactly once, with the action matching its final state.
 func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) {
 	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 	// Truncate to whole seconds: RecomputeNumber writes this exact value as
-	// updated_at, and all four numbers below share it, forcing them into
-	// the same updated_at second.
+	// updated_at, and every number below shares it, forcing them into the
+	// same updated_at second.
 	now := time.Now().UTC().Truncate(time.Second)
 
 	numbers := []string{
@@ -383,8 +391,53 @@ func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) 
 		}
 	}
 
+	// Two more numbers, walked blocked -> unknown, both recomputes writing
+	// updated_at = now (the SAME second as the four block numbers above),
+	// so their removal-query row and the base-query rows above land on the
+	// identical (sec) boundary the keyset cursor must not drop or duplicate.
+	unblockNumbers := []string{
+		"+14155559605",
+		"+14155559606",
+	}
+	for i, number := range unblockNumbers {
+		numberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+		if err != nil {
+			t.Fatalf("UpsertPhoneNumber (unblock %d): %v", i, err)
+		}
+		var deviceIDs []uint64
+		for _, suffix := range []string{"1", "2", "3"} {
+			deviceID := insertDevice(t, sqlDB, fmt.Sprintf("keyset-unblock-device-%d-%s", i, suffix), 1.0)
+			deviceIDs = append(deviceIDs, deviceID)
+			if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+				t.Fatalf("UpsertReport (unblock %d, spam): %v", i, err)
+			}
+		}
+		if status, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusBlocked {
+			t.Fatalf("RecomputeNumber (unblock %d, blocked): status=%s err=%v", i, status, err)
+		}
+		for _, deviceID := range deviceIDs {
+			if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteNotSpam, now); err != nil {
+				t.Fatalf("UpsertReport (unblock %d, not_spam): %v", i, err)
+			}
+		}
+		// Same `now` as above: the flip back to unknown lands in the exact
+		// same updated_at second as the still-blocked numbers.
+		if status, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusUnknown {
+			t.Fatalf("RecomputeNumber (unblock %d, unknown): status=%s err=%v", i, status, err)
+		}
+	}
+
+	wantAction := make(map[string]string, len(numbers)+len(unblockNumbers))
+	for _, number := range numbers {
+		wantAction[number] = "block"
+	}
+	for _, number := range unblockNumbers {
+		wantAction[number] = "unblock"
+	}
+
 	const limit = 2
 	seen := make(map[string]int)
+	seenAction := make(map[string]string)
 	var sec int64
 	var id uint64
 	for page := 0; page < 10; page++ {
@@ -397,6 +450,7 @@ func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) 
 		}
 		for _, e := range entries {
 			seen[e.Number]++
+			seenAction[e.Number] = e.Action
 		}
 		if nextSec == sec && nextID == id {
 			t.Fatalf("cursor did not advance on page %d: (%d,%d)", page, nextSec, nextID)
@@ -404,13 +458,297 @@ func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) 
 		sec, id = nextSec, nextID
 	}
 
-	if len(seen) != len(numbers) {
-		t.Fatalf("saw %d distinct numbers across pages, want %d; seen=%v", len(seen), len(numbers), seen)
+	if len(seen) != len(wantAction) {
+		t.Fatalf("saw %d distinct numbers across pages, want %d; seen=%v", len(seen), len(wantAction), seen)
 	}
-	for _, number := range numbers {
+	for number, action := range wantAction {
 		if seen[number] != 1 {
 			t.Errorf("number %q returned %d times across pages, want exactly 1", number, seen[number])
 		}
+		if seenAction[number] != action {
+			t.Errorf("number %q action = %q, want %q", number, seenAction[number], action)
+		}
+	}
+}
+
+// TestBlocklistDelta_UnblockLifecycle pins the removal-tombstone lifecycle:
+// a number that reaches "blocked" and is then walked back down to "unknown"
+// (by the same 3 devices re-voting not_spam) must surface as
+// action:"unblock" in the very next delta after the walk-back, exactly once.
+func TestBlocklistDelta_UnblockLifecycle(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	number := "+14155559701"
+	numberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+	deviceKeyIDs := []string{"unblock-device-1", "unblock-device-2", "unblock-device-3"}
+	var deviceIDs []uint64
+	for _, keyID := range deviceKeyIDs {
+		deviceID := insertDevice(t, sqlDB, keyID, 1.0)
+		deviceIDs = append(deviceIDs, deviceID)
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+			t.Fatalf("UpsertReport (spam): %v", err)
+		}
+	}
+	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	if err != nil {
+		t.Fatalf("RecomputeNumber (blocked): %v", err)
+	}
+	if status != scoring.StatusBlocked {
+		t.Fatalf("status = %s, want %s", status, scoring.StatusBlocked)
+	}
+
+	entries, cursorSec, cursorID, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (initial): %v", err)
+	}
+	var blockEntry *BlocklistEntry
+	for i := range entries {
+		if entries[i].Number == number {
+			blockEntry = &entries[i]
+		}
+	}
+	if blockEntry == nil {
+		t.Fatalf("blocked number missing from initial delta")
+	}
+	if blockEntry.Action != "block" {
+		t.Errorf("initial action = %q, want %q", blockEntry.Action, "block")
+	}
+
+	// Same 3 devices flip to not_spam: status falls back to unknown.
+	t1 := now.Add(time.Minute)
+	for _, deviceID := range deviceIDs {
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteNotSpam, t1); err != nil {
+			t.Fatalf("UpsertReport (not_spam): %v", err)
+		}
+	}
+	status, err = RecomputeNumber(ctx, sqlDB, numberID, t1)
+	if err != nil {
+		t.Fatalf("RecomputeNumber (unknown): %v", err)
+	}
+	if status != scoring.StatusUnknown {
+		t.Fatalf("status = %s, want %s", status, scoring.StatusUnknown)
+	}
+
+	deltaEntries, _, _, err := BlocklistDelta(ctx, sqlDB, cursorSec, cursorID, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (delta): %v", err)
+	}
+	var unblockCount int
+	var unblockEntry BlocklistEntry
+	for _, e := range deltaEntries {
+		if e.Number == number {
+			unblockCount++
+			unblockEntry = e
+		}
+	}
+	if unblockCount != 1 {
+		t.Fatalf("unblock entries for %q = %d, want exactly 1", number, unblockCount)
+	}
+	if unblockEntry.Action != "unblock" {
+		t.Errorf("action = %q, want %q", unblockEntry.Action, "unblock")
+	}
+	if unblockEntry.Name != nil {
+		t.Errorf("unblock entry name = %q, want nil", *unblockEntry.Name)
+	}
+	if unblockEntry.SpoofSuspected {
+		t.Errorf("unblock entry SpoofSuspected = true, want false")
+	}
+}
+
+// TestBlocklistDelta_AdminAllowProducesUnblock pins the admin-override path:
+// a blocked number force-allowlisted by an admin must surface as
+// action:"unblock" (allowlisted numbers are removals, not block entries),
+// not as a "block"/"label" entry with status allowlisted.
+func TestBlocklistDelta_AdminAllowProducesUnblock(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	number := "+14155559702"
+	numberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+	for _, keyID := range []string{"allow-device-1", "allow-device-2", "allow-device-3"} {
+		deviceID := insertDevice(t, sqlDB, keyID, 1.0)
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+			t.Fatalf("UpsertReport: %v", err)
+		}
+	}
+	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	if err != nil {
+		t.Fatalf("RecomputeNumber (blocked): %v", err)
+	}
+	if status != scoring.StatusBlocked {
+		t.Fatalf("status = %s, want %s", status, scoring.StatusBlocked)
+	}
+
+	_, cursorSec, cursorID, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (initial): %v", err)
+	}
+
+	t1 := now.Add(time.Minute)
+	if _, err := sqlDB.Exec(
+		"INSERT INTO admin_overrides (phone_number_id, mode, admin) VALUES (?, 'allow', 'test-admin')",
+		numberID,
+	); err != nil {
+		t.Fatalf("insert admin_overrides: %v", err)
+	}
+	status, err = RecomputeNumber(ctx, sqlDB, numberID, t1)
+	if err != nil {
+		t.Fatalf("RecomputeNumber (allowlisted): %v", err)
+	}
+	if status != scoring.StatusAllowlisted {
+		t.Fatalf("status = %s, want %s", status, scoring.StatusAllowlisted)
+	}
+
+	deltaEntries, _, _, err := BlocklistDelta(ctx, sqlDB, cursorSec, cursorID, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (delta): %v", err)
+	}
+	var found *BlocklistEntry
+	for i := range deltaEntries {
+		if deltaEntries[i].Number == number {
+			found = &deltaEntries[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("allowlisted number missing from delta")
+	}
+	if found.Action != "unblock" {
+		t.Errorf("action = %q, want %q", found.Action, "unblock")
+	}
+}
+
+// TestBlocklistDelta_NeverBlockableNumberNeverAppears pins the no-spurious-
+// unblocks guarantee: a number that has NEVER been blockable (was_blockable
+// stays 0, status stays unknown) must not appear in any delta, in either the
+// full-snapshot or since-cursor form.
+func TestBlocklistDelta_NeverBlockableNumberNeverAppears(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	number := "+14155559703"
+	if _, err := UpsertPhoneNumber(ctx, sqlDB, number, now); err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+	// Never reported, never recomputed: status stays the table default
+	// "unknown" and was_blockable stays its default 0.
+
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (snapshot): %v", err)
+	}
+	for _, e := range entries {
+		if e.Number == number {
+			t.Errorf("never-blockable number present in full-snapshot delta")
+		}
+	}
+
+	entries, _, _, err = BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (since 0): %v", err)
+	}
+	for _, e := range entries {
+		if e.Number == number {
+			t.Errorf("never-blockable number present in since-0 delta")
+		}
+	}
+}
+
+// TestBlocklistDelta_Oscillation pins that a number cycling
+// blocked -> unblock -> blocked again produces consistent, correctly
+// ordered events: after the second block, the delta must show the number as
+// "block" (not "unblock"), and it must not also carry a stray unblock entry
+// for the same number.
+func TestBlocklistDelta_Oscillation(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	number := "+14155559704"
+	numberID, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+	deviceKeyIDs := []string{"osc-device-1", "osc-device-2", "osc-device-3"}
+	var deviceIDs []uint64
+	for _, keyID := range deviceKeyIDs {
+		deviceID := insertDevice(t, sqlDB, keyID, 1.0)
+		deviceIDs = append(deviceIDs, deviceID)
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+			t.Fatalf("UpsertReport (spam 1): %v", err)
+		}
+	}
+	if status, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusBlocked {
+		t.Fatalf("RecomputeNumber (blocked 1): status=%s err=%v", status, err)
+	}
+	_, sec1, id1, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (after block 1): %v", err)
+	}
+
+	t1 := now.Add(time.Minute)
+	for _, deviceID := range deviceIDs {
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteNotSpam, t1); err != nil {
+			t.Fatalf("UpsertReport (not_spam): %v", err)
+		}
+	}
+	if status, err := RecomputeNumber(ctx, sqlDB, numberID, t1); err != nil || status != scoring.StatusUnknown {
+		t.Fatalf("RecomputeNumber (unknown): status=%s err=%v", status, err)
+	}
+	unblockEntries, sec2, id2, err := BlocklistDelta(ctx, sqlDB, sec1, id1, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (after unblock): %v", err)
+	}
+	if len(unblockEntries) != 1 || unblockEntries[0].Number != number || unblockEntries[0].Action != "unblock" {
+		t.Fatalf("entries after unblock = %+v, want single unblock entry for %q", unblockEntries, number)
+	}
+
+	t2 := now.Add(2 * time.Minute)
+	for _, deviceID := range deviceIDs {
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, numberID, scoring.CategoryScam, scoring.VoteSpam, t2); err != nil {
+			t.Fatalf("UpsertReport (spam 2): %v", err)
+		}
+	}
+	if status, err := RecomputeNumber(ctx, sqlDB, numberID, t2); err != nil || status != scoring.StatusBlocked {
+		t.Fatalf("RecomputeNumber (blocked 2): status=%s err=%v", status, err)
+	}
+	reblockEntries, _, _, err := BlocklistDelta(ctx, sqlDB, sec2, id2, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (after re-block): %v", err)
+	}
+	if len(reblockEntries) != 1 || reblockEntries[0].Number != number || reblockEntries[0].Action != "block" {
+		t.Fatalf("entries after re-block = %+v, want single block entry for %q", reblockEntries, number)
+	}
+
+	// A full snapshot from scratch must show the number in its CURRENT
+	// state ("block") exactly once, with no leftover "unblock" duplicate
+	// from the oscillation in between.
+	snapshot, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
+	if err != nil {
+		t.Fatalf("BlocklistDelta (snapshot): %v", err)
+	}
+	var matches int
+	var finalAction string
+	for _, e := range snapshot {
+		if e.Number == number {
+			matches++
+			finalAction = e.Action
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("snapshot entries for %q = %d, want 1", number, matches)
+	}
+	if finalAction != "block" {
+		t.Errorf("snapshot action = %q, want %q", finalAction, "block")
 	}
 }
 

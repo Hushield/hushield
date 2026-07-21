@@ -16,6 +16,14 @@ type blocklistHandler struct {
 	db *sql.DB
 }
 
+// blocklistEntryResponse serializes one delta entry. Action is one of
+// "block", "label", or "unblock". Client contract: apply entries in cursor
+// order (the order they're returned in, which is the store's
+// (updated_at, phone_number_id) keyset order) -- "block"/"label" mean
+// add/label the number in the device's local block/label sets, and
+// "unblock" means remove it from both sets (a number that ages off, gets an
+// admin allow override, or is walked back down by not_spam votes stops
+// being blockable and must be actively removed, not just left stale).
 type blocklistEntryResponse struct {
 	Number         string  `json:"number"`
 	Action         string  `json:"action"`

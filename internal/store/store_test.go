@@ -253,6 +253,70 @@ func TestRecomputeNumber_ScamReportsCrossThresholds(t *testing.T) {
 	}
 }
 
+func TestRecomputeNumber_WasBlockableStickyFlag(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	phoneNumberID, err := UpsertPhoneNumber(ctx, sqlDB, "+14155550007", now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+
+	// Freshly created, never reported: was_blockable must start false.
+	var wasBlockable bool
+	if err := sqlDB.QueryRow("SELECT was_blockable FROM phone_numbers WHERE phone_number_id = ?", phoneNumberID).Scan(&wasBlockable); err != nil {
+		t.Fatalf("select was_blockable (initial): %v", err)
+	}
+	if wasBlockable {
+		t.Fatalf("was_blockable = true before any recompute, want false")
+	}
+
+	device1 := insertDevice(t, sqlDB, "sticky-device-1", 1.0)
+	device2 := insertDevice(t, sqlDB, "sticky-device-2", 1.0)
+	device3 := insertDevice(t, sqlDB, "sticky-device-3", 1.0)
+	for _, deviceID := range []uint64{device1, device2, device3} {
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, phoneNumberID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+			t.Fatalf("UpsertReport: %v", err)
+		}
+	}
+
+	status, err := RecomputeNumber(ctx, sqlDB, phoneNumberID, now)
+	if err != nil {
+		t.Fatalf("RecomputeNumber (blocked): %v", err)
+	}
+	if status != scoring.StatusBlocked {
+		t.Fatalf("status = %s, want %s", status, scoring.StatusBlocked)
+	}
+	if err := sqlDB.QueryRow("SELECT was_blockable FROM phone_numbers WHERE phone_number_id = ?", phoneNumberID).Scan(&wasBlockable); err != nil {
+		t.Fatalf("select was_blockable (after blocked): %v", err)
+	}
+	if !wasBlockable {
+		t.Fatalf("was_blockable = false after status went blocked, want true")
+	}
+
+	// All 3 devices flip to not_spam: status falls back to unknown, but
+	// was_blockable must stay true (sticky, never resets 1->0).
+	for _, deviceID := range []uint64{device1, device2, device3} {
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, phoneNumberID, scoring.CategoryScam, scoring.VoteNotSpam, now.Add(time.Minute)); err != nil {
+			t.Fatalf("UpsertReport (not_spam): %v", err)
+		}
+	}
+	status, err = RecomputeNumber(ctx, sqlDB, phoneNumberID, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("RecomputeNumber (unknown): %v", err)
+	}
+	if status != scoring.StatusUnknown {
+		t.Fatalf("status = %s, want %s", status, scoring.StatusUnknown)
+	}
+	if err := sqlDB.QueryRow("SELECT was_blockable FROM phone_numbers WHERE phone_number_id = ?", phoneNumberID).Scan(&wasBlockable); err != nil {
+		t.Fatalf("select was_blockable (after unknown): %v", err)
+	}
+	if !wasBlockable {
+		t.Fatalf("was_blockable = false after falling back to unknown, want true (sticky flag)")
+	}
+}
+
 func TestRecomputeNumber_OverrideBlock(t *testing.T) {
 	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
@@ -275,6 +339,14 @@ func TestRecomputeNumber_OverrideBlock(t *testing.T) {
 	}
 	if status != scoring.StatusOverriddenBlock {
 		t.Fatalf("status = %s, want %s", status, scoring.StatusOverriddenBlock)
+	}
+
+	var wasBlockable bool
+	if err := sqlDB.QueryRow("SELECT was_blockable FROM phone_numbers WHERE phone_number_id = ?", phoneNumberID).Scan(&wasBlockable); err != nil {
+		t.Fatalf("select was_blockable: %v", err)
+	}
+	if !wasBlockable {
+		t.Fatalf("was_blockable = false after overridden_block, want true")
 	}
 }
 

@@ -12,6 +12,76 @@ import (
 	"spamfilter/internal/token"
 )
 
+// TestBlocklistEndpoint_AdminAllowSurfacesAsUnblock confirms the store's
+// action:"unblock" value flows unmodified through the HTTP handler and JSON
+// envelope: a community-blocked number that an admin override then
+// allowlists must appear in the next delta as {"action":"unblock"}, not as a
+// leftover "block"/"label" entry with the new status.
+func TestBlocklistEndpoint_AdminAllowSurfacesAsUnblock(t *testing.T) {
+	database := dbtest.SetupDB(t)
+
+	cfg := config.Config{
+		AttestMode:        "mock",
+		DeviceTokenSecret: "blocklist-unblock-secret",
+		DeviceTokenTTL:    time.Hour,
+		ChallengeTTL:      5 * time.Minute,
+		AdminToken:        "unblock-test-admin-token",
+	}
+	router := NewRouter(database, cfg)
+	signer := token.NewSigner([]byte(cfg.DeviceTokenSecret))
+
+	_, callerToken := mintDeviceToken(t, database, signer, 1.0)
+
+	number := uniquePhoneNumber()
+	_, d1 := mintDeviceToken(t, database, signer, 1.0)
+	_, d2 := mintDeviceToken(t, database, signer, 1.0)
+	_, d3 := mintDeviceToken(t, database, signer, 1.0)
+	for _, tok := range []string{d1, d2, d3} {
+		rec := postReport(router, tok, reportRequestBody{Number: number, Category: "scam", Vote: "spam"})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("seed report status = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+	}
+
+	overrideRec := postOverride(router, cfg.AdminToken, overrideRequestBody{Number: number, Mode: "allow"})
+	if overrideRec.Code != http.StatusOK {
+		t.Fatalf("admin override status = %d, want 200; body=%s", overrideRec.Code, overrideRec.Body)
+	}
+
+	// A full snapshot (since=0) taken after both the block and the
+	// override reflects the number's current, final state: it must be
+	// action:"unblock", not a leftover "block"/"label" entry. (The store
+	// package's tests already cover the delta/cursor mechanics of the
+	// block -> unblock transition in depth; this test only confirms the
+	// store's "unblock" action value survives the HTTP handler's JSON
+	// envelope unmodified.)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/blocklist", nil)
+	req.Header.Set("Authorization", "Bearer "+callerToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	_, data := decodeEnvelope(t, rec.Body.Bytes())
+	var resp blocklistResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var found *blocklistEntryResponse
+	for i := range resp.Entries {
+		if resp.Entries[i].Number == number {
+			found = &resp.Entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("number missing from post-override snapshot: %+v", resp.Entries)
+	}
+	if found.Action != "unblock" {
+		t.Errorf("action = %q, want %q", found.Action, "unblock")
+	}
+}
+
 func TestBlocklistEndpoint_MissingToken(t *testing.T) {
 	router := NewRouter(nil, config.Config{DeviceTokenSecret: "secret"})
 
