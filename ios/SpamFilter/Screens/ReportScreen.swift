@@ -15,7 +15,7 @@ struct ReportScreen: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                     header
 
-                    NumberField(title: "Phone number", text: $model.number)
+                    NumberField(title: "Phone number", text: $model.number, identifier: "report.numberField")
                         .onChange(of: model.number) { model.validationMessage = nil }
 
                     votePicker
@@ -27,6 +27,7 @@ struct ReportScreen: View {
                         Text(validation)
                             .font(.footnote)
                             .foregroundStyle(Theme.danger)
+                            .accessibilityIdentifier("report.validationError")
                     }
 
                     resultSection
@@ -34,6 +35,7 @@ struct ReportScreen: View {
                     Button("Submit report") { submit() }
                         .buttonStyle(PrimaryButtonStyle(isBusy: model.isSubmitting))
                         .disabled(model.isSubmitting)
+                        .accessibilityIdentifier("report.submit")
                 }
                 .padding(Theme.Spacing.md)
             }
@@ -118,6 +120,7 @@ struct ReportScreen: View {
                             .foregroundStyle(Theme.secondaryText)
                         Spacer()
                         StatusBadge(level: level, text: status.capitalized)
+                            .accessibilityIdentifier("report.resultBadge")
                     }
                 }
             }

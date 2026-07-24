@@ -13,18 +13,20 @@ struct LookupScreen: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                    NumberField(title: "Phone number", text: $model.number)
+                    NumberField(title: "Phone number", text: $model.number, identifier: "lookup.numberField")
                         .onChange(of: model.number) { model.validationMessage = nil }
 
                     if let validation = model.validationMessage {
                         Text(validation)
                             .font(.footnote)
                             .foregroundStyle(Theme.danger)
+                            .accessibilityIdentifier("lookup.validationError")
                     }
 
                     Button("Look up") { lookup() }
                         .buttonStyle(PrimaryButtonStyle(isBusy: model.isLoading))
                         .disabled(model.isLoading)
+                        .accessibilityIdentifier("lookup.submit")
 
                     resultSection
                 }
@@ -64,6 +66,7 @@ struct LookupScreen: View {
                         .font(.title3.weight(.semibold))
                     Spacer()
                     StatusBadge(level: level, text: data.status.capitalized)
+                        .accessibilityIdentifier("lookup.resultBadge")
                 }
 
                 Divider()

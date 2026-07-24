@@ -24,6 +24,7 @@ struct StatusScreen: View {
                     Button("Sync now") { sync() }
                         .buttonStyle(PrimaryButtonStyle(isBusy: model.isSyncing))
                         .disabled(model.isSyncing)
+                        .accessibilityIdentifier("status.syncButton")
                 }
                 .padding(Theme.Spacing.md)
             }
@@ -82,6 +83,7 @@ struct StatusScreen: View {
                 Spacer()
                 Text(lastSyncedText)
                     .fontWeight(.medium)
+                    .accessibilityIdentifier("status.lastSynced")
             }
             .font(Theme.Typography.body)
         }

@@ -96,6 +96,7 @@ targets:
     platform: iOS
     sources:
       - path: SpamFilterKitTests
+        excludes: ["**/*.md"]
     dependencies:
       - target: SpamFilterKit
     settings:
@@ -108,6 +109,7 @@ targets:
     platform: iOS
     sources:
       - path: SpamFilterAppTests
+        excludes: ["**/*.md"]
     dependencies:
       - target: SpamFilter
       - target: SpamFilterKit
@@ -123,6 +125,7 @@ targets:
     platform: iOS
     sources:
       - path: SpamFilterUITests
+        excludes: ["**/*.md"]
     dependencies:
       - target: SpamFilter
     settings:

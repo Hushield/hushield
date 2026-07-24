@@ -11,6 +11,18 @@ final class AppEnvironment {
     let statusReading: StatusReading
 
     init() {
+        // UI-test-only branch: when launched with `-uitest` (set by
+        // SpamFilterUITests), wire deterministic in-memory fakes instead of
+        // the real network/keychain/App Group stack below. Production path
+        // is unchanged.
+        if UITestSupport.isEnabled {
+            self.reporting = UITestReporting()
+            self.lookup = UITestLookup()
+            self.syncing = UITestSyncing()
+            self.statusReading = UITestStatusReading()
+            return
+        }
+
         let baseURL = AppEnvironment.resolveBaseURL()
 
         let transport = URLSessionTransport()

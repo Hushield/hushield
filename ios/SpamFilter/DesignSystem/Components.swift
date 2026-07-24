@@ -85,6 +85,7 @@ struct NumberField: View {
     let title: String
     @Binding var text: String
     var placeholder: String = "+14155551234"
+    var identifier: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -98,6 +99,7 @@ struct NumberField: View {
                     .keyboardType(.phonePad)
                     .textContentType(.telephoneNumber)
                     .autocorrectionDisabled()
+                    .accessibilityIdentifier(identifier)
             }
             .padding(Theme.Spacing.md - 2)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
