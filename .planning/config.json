@@ -1,0 +1,17 @@
+{
+  "gates": {
+    "confirm_project": true,
+    "confirm_roadmap": true,
+    "confirm_plan": true,
+    "execute_next_plan": true,
+    "confirm_transition": true
+  },
+  "granularity": "standard",
+  "mode": "interactive",
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "auto_advance": false
+  }
+}
