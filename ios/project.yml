@@ -56,6 +56,7 @@ targets:
     scheme:
       testTargets:
         - SpamFilterKitTests
+        - SpamFilterAppTests
         - SpamFilterUITests
 
   CallDirectoryExtension:
@@ -101,6 +102,21 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
+
+  SpamFilterAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SpamFilterAppTests
+    dependencies:
+      - target: SpamFilter
+      - target: SpamFilterKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/SpamFilter.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SpamFilter"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 
   SpamFilterUITests:
     type: bundle.ui-testing

@@ -1,21 +1,23 @@
 import SwiftUI
 
+/// Root tab bar wiring the four screens to the shared `AppEnvironment`.
 struct ContentView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "phone.badge.checkmark")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
-            Text("SpamFilter")
-                .font(.largeTitle.bold())
-            Text("Community spam call & text filtering")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .padding()
-    }
-}
+    let environment: AppEnvironment
 
-#Preview {
-    ContentView()
+    var body: some View {
+        TabView {
+            ReportScreen(reporting: environment.reporting)
+                .tabItem { Label("Report", systemImage: "flag.fill") }
+
+            LookupScreen(lookup: environment.lookup)
+                .tabItem { Label("Lookup", systemImage: "magnifyingglass") }
+
+            StatusScreen(syncing: environment.syncing, status: environment.statusReading)
+                .tabItem { Label("Status", systemImage: "chart.bar.fill") }
+
+            SetupScreen()
+                .tabItem { Label("Set up", systemImage: "gearshape.fill") }
+        }
+        .tint(Theme.accent)
+    }
 }
