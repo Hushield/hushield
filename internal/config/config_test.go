@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -115,6 +116,7 @@ func TestLoad_AttestOverrides(t *testing.T) {
 	t.Setenv("ATTEST_MODE", "apple")
 	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
 	t.Setenv("DEVICE_TOKEN_SECRET", "a-real-secret")
+	t.Setenv("ADMIN_TOKEN", "super-secret-admin-token")
 	t.Setenv("DEVICE_TOKEN_TTL", "48h")
 	t.Setenv("CHALLENGE_TTL", "90s")
 
@@ -149,6 +151,75 @@ func TestLoad_AppleModeRequiresAppID(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatalf("Load() with mode=apple and empty APP_ID should return an error")
+	}
+}
+
+func TestLoad_AppleModeSucceedsWithSecurePosture(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "apple")
+	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
+	t.Setenv("DEVICE_TOKEN_SECRET", "a-real-strong-secret-value")
+	t.Setenv("ADMIN_TOKEN", "a-real-admin-token")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() with secure apple posture returned error: %v", err)
+	}
+}
+
+func TestLoad_AppleModeRequiresNonDefaultDeviceTokenSecret(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "apple")
+	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
+	t.Setenv("ADMIN_TOKEN", "a-real-admin-token")
+	t.Setenv("DEVICE_TOKEN_SECRET", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() with mode=apple and unset DEVICE_TOKEN_SECRET should return an error")
+	}
+	if !strings.Contains(err.Error(), "DEVICE_TOKEN_SECRET") {
+		t.Errorf("error = %q, want it to name DEVICE_TOKEN_SECRET", err.Error())
+	}
+
+	// Also reject an explicit value equal to the known-insecure dev default.
+	t.Setenv("DEVICE_TOKEN_SECRET", devDefaultTokenSecret)
+	_, err = Load()
+	if err == nil {
+		t.Fatalf("Load() with mode=apple and DEVICE_TOKEN_SECRET set to the insecure dev default should return an error")
+	}
+	if !strings.Contains(err.Error(), "DEVICE_TOKEN_SECRET") {
+		t.Errorf("error = %q, want it to name DEVICE_TOKEN_SECRET", err.Error())
+	}
+}
+
+func TestLoad_AppleModeRequiresAdminToken(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "apple")
+	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
+	t.Setenv("DEVICE_TOKEN_SECRET", "a-real-strong-secret-value")
+	t.Setenv("ADMIN_TOKEN", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() with mode=apple and empty ADMIN_TOKEN should return an error")
+	}
+	if !strings.Contains(err.Error(), "ADMIN_TOKEN") {
+		t.Errorf("error = %q, want it to name ADMIN_TOKEN", err.Error())
+	}
+}
+
+func TestLoad_MockModeAllowsInsecureDefaults(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "mock")
+	t.Setenv("DEVICE_TOKEN_SECRET", "")
+	t.Setenv("ADMIN_TOKEN", "")
+	t.Setenv("APP_ID", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() in mock mode with insecure defaults returned error: %v", err)
+	}
+	if !cfg.DeviceTokenSecretIsDefault {
+		t.Errorf("DeviceTokenSecretIsDefault = false, want true in mock mode with unset secret")
+	}
+	if cfg.AdminToken != "" {
+		t.Errorf("AdminToken = %q, want empty", cfg.AdminToken)
 	}
 }
 

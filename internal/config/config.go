@@ -96,8 +96,16 @@ func Load() (Config, error) {
 		APNSTopic:                  getEnv("APNS_TOPIC", ""),
 	}
 
-	if cfg.AttestMode == "apple" && cfg.AppID == "" {
-		return Config{}, fmt.Errorf("config: APP_ID is required when ATTEST_MODE=apple")
+	if cfg.AttestMode == "apple" {
+		if cfg.AppID == "" {
+			return Config{}, fmt.Errorf("config: APP_ID is required when ATTEST_MODE=apple")
+		}
+		if cfg.DeviceTokenSecret == devDefaultTokenSecret {
+			return Config{}, fmt.Errorf("config: DEVICE_TOKEN_SECRET must be set to a strong, unique secret when ATTEST_MODE=apple (insecure dev default detected); generate one with `openssl rand -hex 32`")
+		}
+		if cfg.AdminToken == "" {
+			return Config{}, fmt.Errorf("config: ADMIN_TOKEN is required when ATTEST_MODE=apple (must not leave admin routes unauthenticated in production)")
+		}
 	}
 
 	if cfg.ChallengeStore == "redis" && cfg.RedisURL == "" {
