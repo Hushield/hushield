@@ -27,6 +27,8 @@ type RedisChallengeStore struct {
 	client redis.Cmdable
 }
 
+var _ ChallengeStore = (*RedisChallengeStore)(nil)
+
 // NewRedisChallengeStore returns a ChallengeStore backed by client.
 func NewRedisChallengeStore(client redis.Cmdable) *RedisChallengeStore {
 	return &RedisChallengeStore{client: client}
@@ -40,6 +42,9 @@ func (s *RedisChallengeStore) Issue(now time.Time, ttl time.Duration) ([]byte, e
 		return nil, err
 	}
 
+	// The stored value "1" is a placeholder and intentionally unused; the
+	// key's existence (namespaced by the random challenge) alone carries
+	// the signal, and TTL/GETDEL handle expiry and one-time consumption.
 	if err := s.client.Set(context.Background(), redisChallengeKey(ch), "1", ttl).Err(); err != nil {
 		return nil, fmt.Errorf("attest: redis challenge store issue: %w", err)
 	}

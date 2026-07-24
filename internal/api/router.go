@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
-	"log"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -83,14 +83,14 @@ func buildChallengeStore(cfg config.Config) attest.ChallengeStore {
 
 	opts, err := redis.ParseURL(cfg.RedisURL)
 	if err != nil {
-		log.Fatalf("config: invalid REDIS_URL for CHALLENGE_STORE=redis: %v", err)
+		panic(fmt.Sprintf("config: invalid REDIS_URL for CHALLENGE_STORE=redis: %v", err))
 	}
 	client := redis.NewClient(opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
-		log.Fatalf("challenge store: cannot reach redis at %s: %v", cfg.RedisURL, err)
+		panic(fmt.Sprintf("challenge store: cannot reach redis at %s: %v", cfg.RedisURL, err))
 	}
 
 	return attest.NewRedisChallengeStore(client)
