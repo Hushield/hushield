@@ -2,6 +2,7 @@ package seed
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -111,6 +112,71 @@ func TestSeeder_Seed_ImportsValidNumbersAndSkipsInvalid(t *testing.T) {
 	}
 	if reportCount != 1 {
 		t.Errorf("reports for (seed device, number) after second run = %d, want 1", reportCount)
+	}
+}
+
+// errorSource is a Source whose Records always fails, used to exercise
+// Seed's "src.Records returns an error" branch.
+type errorSource struct{ err error }
+
+func (s errorSource) Records(ctx context.Context) ([]Record, error) {
+	return nil, s.err
+}
+
+func TestSeeder_Seed_SourceErrorPropagates(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+
+	seeder := Seeder{DB: sqlDB}
+	_, _, err := seeder.Seed(ctx, errorSource{err: errors.New("boom: file unreadable")}, "ftc", 1.5, scoring.CategoryRobocall)
+	if err == nil {
+		t.Fatal("Seed: want error when the source fails, got nil")
+	}
+}
+
+// TestSeeder_Seed_ExplicitCategoryOverridesDefault confirms a record's own
+// non-blank Category wins over the job's defaultCategory, rather than always
+// falling back to it.
+func TestSeeder_Seed_ExplicitCategoryOverridesDefault(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+
+	src := mockSource{records: []Record{
+		{RawNumber: "+14155554444", Category: scoring.CategoryTelemarketer},
+	}}
+	seeder := Seeder{DB: sqlDB}
+
+	imported, _, err := seeder.Seed(ctx, src, "fcc", 1.0, scoring.CategoryRobocall)
+	if err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if imported != 1 {
+		t.Fatalf("imported = %d, want 1", imported)
+	}
+
+	var category string
+	if err := sqlDB.QueryRow(
+		"SELECT reports.category FROM reports JOIN phone_numbers ON reports.phone_number_id = phone_numbers.phone_number_id WHERE phone_numbers.number = ?",
+		"+14155554444",
+	).Scan(&category); err != nil {
+		t.Fatalf("select report category: %v", err)
+	}
+	if category != string(scoring.CategoryTelemarketer) {
+		t.Errorf("report category = %q, want %q (record's own category, not the job default)", category, scoring.CategoryTelemarketer)
+	}
+}
+
+// TestSeeder_Seed_EnsureSeedDeviceErrorPropagates confirms Seed surfaces the
+// error when EnsureSeedDevice itself fails (a closed DB), before ever
+// touching the source.
+func TestSeeder_Seed_EnsureSeedDeviceErrorPropagates(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	sqlDB.Close()
+
+	seeder := Seeder{DB: sqlDB}
+	_, _, err := seeder.Seed(context.Background(), mockSource{}, "ftc", 1.5, scoring.CategoryRobocall)
+	if err == nil {
+		t.Fatal("Seed: want error when EnsureSeedDevice fails, got nil")
 	}
 }
 

@@ -330,6 +330,86 @@ func TestReportsEndpoint_NameTooLong(t *testing.T) {
 	}
 }
 
+// TestReportsEndpoint_WriteError_500 confirms handleCreate surfaces
+// writeReport's error (a closed DB, so BeginTx fails) as a 500 rather than
+// panicking or silently succeeding.
+func TestReportsEndpoint_WriteError_500(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	database.Close() // every subsequent call now fails
+
+	h := &reportsHandler{db: database}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reports", strings.NewReader(`{"number":"+14155552671","category":"scam","vote":"spam"}`))
+	req = req.WithContext(deviceCtx(42))
+	rec := httptest.NewRecorder()
+	h.handleCreate(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+}
+
+// TestReportsEndpoint_WriteReport_MidTransactionError_500 renames away the
+// reports table after a real phone_numbers row exists, so writeReport's
+// BeginTx and UpsertPhoneNumber succeed but its UpsertReport call fails --
+// the deeper transaction-body error branch a wholesale closed-DB test can't
+// reach.
+func TestReportsEndpoint_WriteReport_MidTransactionError_500(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	if _, err := database.Exec("RENAME TABLE reports TO reports_renamed_away"); err != nil {
+		t.Fatalf("rename reports table: %v", err)
+	}
+
+	h := &reportsHandler{db: database}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reports", strings.NewReader(`{"number":"+14155552671","category":"scam","vote":"spam"}`))
+	req = req.WithContext(deviceCtx(1))
+	rec := httptest.NewRecorder()
+	h.handleCreate(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+}
+
+// TestReportsEndpoint_CustomClock confirms handleCreate uses the handler's
+// injected clock (rather than time.Now) when one is set, by asserting the
+// persisted report's created_at matches the injected time exactly.
+func TestReportsEndpoint_CustomClock(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	res, err := database.Exec("INSERT INTO devices (key_id, public_key, trust_weight) VALUES (?, ?, ?)", "reports-clock-device", []byte("pubkey"), 1.0)
+	if err != nil {
+		t.Fatalf("insert device: %v", err)
+	}
+	deviceID64, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+	deviceID := uint64(deviceID64)
+
+	fixed := time.Date(2023, 5, 1, 8, 30, 0, 0, time.UTC)
+	h := &reportsHandler{db: database, now: func() time.Time { return fixed }}
+
+	number := uniquePhoneNumber()
+	body := fmt.Sprintf(`{"number":%q,"category":"scam","vote":"spam"}`, number)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reports", strings.NewReader(body))
+	req = req.WithContext(deviceCtx(deviceID))
+	rec := httptest.NewRecorder()
+	h.handleCreate(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body)
+	}
+	var createdAt time.Time
+	if err := database.QueryRow(
+		"SELECT reports.created_at FROM reports JOIN phone_numbers ON reports.phone_number_id = phone_numbers.phone_number_id WHERE phone_numbers.number = ?",
+		number,
+	).Scan(&createdAt); err != nil {
+		t.Fatalf("select created_at: %v", err)
+	}
+	if !createdAt.Equal(fixed) {
+		t.Errorf("created_at = %v, want %v (the injected clock)", createdAt, fixed)
+	}
+}
+
 func TestReportsEndpoint_MalformedJSON(t *testing.T) {
 	h := &reportsHandler{}
 

@@ -66,6 +66,62 @@ func TestSigner_ParseWrongSecretRejected(t *testing.T) {
 	}
 }
 
+// TestSigner_ParseAuthenticButUnparsablePayload crafts tokens whose HMAC is
+// genuinely valid for a payload that nonetheless fails to parse as a
+// deviceID/expiry pair, exercising the post-HMAC-check parse error branches
+// that a tampered (HMAC-invalid) token can never reach.
+func TestSigner_ParseAuthenticButUnparsablePayload(t *testing.T) {
+	s := NewSigner([]byte("secret-key"))
+	now := time.Unix(1_700_000_000, 0)
+
+	buildToken := func(idPart, expPart string) string {
+		payload := idPart + "." + expPart
+		mac := s.sign(payload)
+		return payload + "." + enc.EncodeToString(mac)
+	}
+
+	t.Run("non-numeric deviceID", func(t *testing.T) {
+		idPart := enc.EncodeToString([]byte("not-a-number"))
+		expPart := enc.EncodeToString([]byte("9999999999"))
+		tok := buildToken(idPart, expPart)
+		if _, err := s.Parse(tok, now); !errors.Is(err, ErrTokenInvalid) {
+			t.Errorf("Parse err = %v, want ErrTokenInvalid", err)
+		}
+	})
+
+	t.Run("non-numeric expiry", func(t *testing.T) {
+		idPart := enc.EncodeToString([]byte("42"))
+		expPart := enc.EncodeToString([]byte("not-a-timestamp"))
+		tok := buildToken(idPart, expPart)
+		if _, err := s.Parse(tok, now); !errors.Is(err, ErrTokenInvalid) {
+			t.Errorf("Parse err = %v, want ErrTokenInvalid", err)
+		}
+	})
+}
+
+// TestSigner_ParseMalformedSegments exercises the base64-decode error
+// branches for each of the token's three dot-separated segments.
+func TestSigner_ParseMalformedSegments(t *testing.T) {
+	s := NewSigner([]byte("secret-key"))
+	now := time.Unix(1_700_000_000, 0)
+
+	cases := []struct {
+		name string
+		tok  string
+	}{
+		{"bad base64 deviceID segment", "not!base64.AAAA.AAAA"},
+		{"bad base64 expiry segment", "AAAA.not!base64.AAAA"},
+		{"bad base64 mac segment", "AAAA.AAAA.not!base64"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := s.Parse(tc.tok, now); !errors.Is(err, ErrTokenInvalid) {
+				t.Errorf("Parse(%q) err = %v, want ErrTokenInvalid", tc.tok, err)
+			}
+		})
+	}
+}
+
 func TestSigner_ParseMalformedRejected(t *testing.T) {
 	s := NewSigner([]byte("secret-key"))
 	now := time.Unix(1_700_000_000, 0)

@@ -22,6 +22,7 @@ func TestNormalize(t *testing.T) {
 		{"international e164", "+442071838750", "+442071838750", false},
 
 		{"empty string", "", "", true},
+		{"just a plus sign", "+", "", true},
 		{"too short digits", "12345", "", true},
 		{"9 digit local", "215555267", "", true},
 		{"11 digit not leading 1", "24155552671", "", true},

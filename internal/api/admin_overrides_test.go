@@ -259,6 +259,72 @@ func TestAdminOverridesEndpoint_AdminDisabled(t *testing.T) {
 	}
 }
 
+// TestAdminOverridesEndpoint_WriteError_500 confirms handleCreate surfaces
+// writeOverride's error (a closed DB, so BeginTx fails) as a 500.
+func TestAdminOverridesEndpoint_WriteError_500(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	database.Close() // every subsequent call now fails
+
+	h := &adminOverridesHandler{db: database}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/overrides", strings.NewReader(`{"number":"+14155552671","mode":"block"}`))
+	req = req.WithContext(reqCtx())
+	rec := httptest.NewRecorder()
+	h.handleCreate(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+}
+
+// TestAdminOverridesEndpoint_WriteOverride_MidTransactionError_500 renames
+// away the admin_overrides table, so writeOverride's BeginTx and
+// UpsertPhoneNumber succeed but its UpsertOverride call fails -- the deeper
+// transaction-body error branch a wholesale closed-DB test can't reach.
+func TestAdminOverridesEndpoint_WriteOverride_MidTransactionError_500(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	if _, err := database.Exec("RENAME TABLE admin_overrides TO admin_overrides_renamed_away"); err != nil {
+		t.Fatalf("rename admin_overrides table: %v", err)
+	}
+
+	h := &adminOverridesHandler{db: database}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/overrides", strings.NewReader(`{"number":"+14155552671","mode":"block"}`))
+	req = req.WithContext(reqCtx())
+	rec := httptest.NewRecorder()
+	h.handleCreate(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+}
+
+// TestAdminOverridesEndpoint_CustomClock confirms handleCreate uses the
+// handler's injected clock (rather than time.Now) when one is set.
+func TestAdminOverridesEndpoint_CustomClock(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	fixed := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+	h := &adminOverridesHandler{db: database, now: func() time.Time { return fixed }}
+
+	number := uniquePhoneNumber()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/overrides", strings.NewReader(`{"number":"`+number+`","mode":"block"}`))
+	req = req.WithContext(reqCtx())
+	rec := httptest.NewRecorder()
+	h.handleCreate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	var createdAt time.Time
+	if err := database.QueryRow(
+		"SELECT admin_overrides.created_at FROM admin_overrides JOIN phone_numbers ON admin_overrides.phone_number_id = phone_numbers.phone_number_id WHERE phone_numbers.number = ?",
+		number,
+	).Scan(&createdAt); err != nil {
+		t.Fatalf("select created_at: %v", err)
+	}
+	if !createdAt.Equal(fixed) {
+		t.Errorf("created_at = %v, want %v (the injected clock)", createdAt, fixed)
+	}
+}
+
 func TestAdminOverridesEndpoint_InvalidNumber(t *testing.T) {
 	h := &adminOverridesHandler{}
 

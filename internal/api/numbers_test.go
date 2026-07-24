@@ -150,6 +150,97 @@ func TestNumbersEndpoint_Allowlisted_DB(t *testing.T) {
 	}
 }
 
+// TestNumbersEndpoint_OverriddenBlock_DB confirms an admin-blocked number
+// (status overridden_block, distinct from a community-earned "blocked") maps
+// to action:"block" too, exercising actionForStatus's other block-mapping
+// case.
+func TestNumbersEndpoint_OverriddenBlock_DB(t *testing.T) {
+	database := dbtest.SetupDB(t)
+
+	cfg := config.Config{
+		AttestMode:        "mock",
+		DeviceTokenSecret: "numbers-overridden-block-secret",
+		DeviceTokenTTL:    time.Hour,
+		ChallengeTTL:      5 * time.Minute,
+		AdminToken:        "numbers-overridden-block-admin-token",
+	}
+	router := NewRouter(database, cfg)
+	signer := token.NewSigner([]byte(cfg.DeviceTokenSecret))
+
+	_, callerToken := mintDeviceToken(t, database, signer, 1.0)
+
+	number := uniquePhoneNumber()
+	overrideRec := postOverride(router, cfg.AdminToken, overrideRequestBody{Number: number, Mode: "block"})
+	if overrideRec.Code != http.StatusOK {
+		t.Fatalf("admin override status = %d, want 200; body=%s", overrideRec.Code, overrideRec.Body)
+	}
+
+	rec := getNumber(router, callerToken, number, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	_, data := decodeEnvelope(t, rec.Body.Bytes())
+	var resp numberLookupResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Status != "overridden_block" {
+		t.Errorf("status = %q, want overridden_block", resp.Status)
+	}
+	if resp.Action != "block" {
+		t.Errorf("action = %q, want block", resp.Action)
+	}
+}
+
+// TestNumbersEndpoint_FoundButUnknown_DB confirms a number that exists in
+// phone_numbers (found=true) but whose status is "unknown" -- e.g. after a
+// counter-report walks it back down -- maps to action:"none" via
+// actionForStatus's default case, distinct from the not-found path (which
+// hardcodes action:"none" without ever calling actionForStatus at all).
+func TestNumbersEndpoint_FoundButUnknown_DB(t *testing.T) {
+	database := dbtest.SetupDB(t)
+
+	cfg := config.Config{
+		AttestMode:        "mock",
+		DeviceTokenSecret: "numbers-found-unknown-secret",
+		DeviceTokenTTL:    time.Hour,
+		ChallengeTTL:      5 * time.Minute,
+	}
+	router := NewRouter(database, cfg)
+	signer := token.NewSigner([]byte(cfg.DeviceTokenSecret))
+
+	_, callerToken := mintDeviceToken(t, database, signer, 1.0)
+
+	number := uniquePhoneNumber()
+	_, reporterToken := mintDeviceToken(t, database, signer, 1.0)
+	rec := postReport(router, reporterToken, reportRequestBody{Number: number, Category: "scam", Vote: "spam"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("spam report status = %d, want 201; body=%s", rec.Code, rec.Body)
+	}
+	// Same device flips its vote: the row survives (found=true) but the score
+	// drops to 0, walking status back to "unknown".
+	rec = postReport(router, reporterToken, reportRequestBody{Number: number, Vote: "not_spam"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("counter-report status = %d, want 201; body=%s", rec.Code, rec.Body)
+	}
+
+	rec = getNumber(router, callerToken, number, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	_, data := decodeEnvelope(t, rec.Body.Bytes())
+	var resp numberLookupResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Status != "unknown" {
+		t.Errorf("status = %q, want unknown", resp.Status)
+	}
+	if resp.Action != "none" {
+		t.Errorf("action = %q, want none", resp.Action)
+	}
+}
+
 func TestNumbersEndpoint_NotFound_DB(t *testing.T) {
 	database := dbtest.SetupDB(t)
 
@@ -332,6 +423,24 @@ func TestNumbersEndpoint_SpoofSuspected_DB(t *testing.T) {
 	}
 	if resp2.SpoofSuspected {
 		t.Errorf("spoof_suspected = true, want false without a prefix param")
+	}
+}
+
+// TestNumbersEndpoint_StoreError_500 confirms handleGet surfaces
+// store.LookupNumber's error (a closed DB) as a 500.
+func TestNumbersEndpoint_StoreError_500(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	database.Close()
+
+	h := &numbersHandler{db: database}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/numbers/+14155552671", nil)
+	req.SetPathValue("e164", "+14155552671")
+	req = req.WithContext(deviceCtx(1))
+	rec := httptest.NewRecorder()
+	h.handleGet(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
 	}
 }
 
