@@ -1,8 +1,13 @@
 package api
 
 import (
+	"context"
 	"database/sql"
+	"log"
 	"net/http"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"spamfilter/internal/attest"
 	"spamfilter/internal/config"
@@ -20,7 +25,7 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 
 	attestH := &attestHandler{
 		db:           db,
-		store:        attest.NewMemoryChallengeStore(),
+		store:        buildChallengeStore(cfg),
 		verifier:     buildVerifier(cfg),
 		signer:       signer,
 		challengeTTL: cfg.ChallengeTTL,
@@ -64,6 +69,31 @@ func buildVerifier(cfg config.Config) attest.Verifier {
 		return attest.NewAppleVerifier(cfg.AppID, attest.DefaultAppleRoots())
 	}
 	return attest.NewMockVerifier([]byte("mock-public-key-der"), nil)
+}
+
+// buildChallengeStore selects the attest.ChallengeStore per config: the
+// process-local MemoryChallengeStore (default), or a RedisChallengeStore
+// when CHALLENGE_STORE=redis, required for a multi-instance deployment.
+// A redis selection with an unparseable or unreachable REDIS_URL fails
+// startup with a clear error rather than silently falling back.
+func buildChallengeStore(cfg config.Config) attest.ChallengeStore {
+	if cfg.ChallengeStore != "redis" {
+		return attest.NewMemoryChallengeStore()
+	}
+
+	opts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("config: invalid REDIS_URL for CHALLENGE_STORE=redis: %v", err)
+	}
+	client := redis.NewClient(opts)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); err != nil {
+		log.Fatalf("challenge store: cannot reach redis at %s: %v", cfg.RedisURL, err)
+	}
+
+	return attest.NewRedisChallengeStore(client)
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {

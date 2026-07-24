@@ -14,6 +14,8 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("DEVICE_TOKEN_SECRET", "")
 	t.Setenv("DEVICE_TOKEN_TTL", "")
 	t.Setenv("CHALLENGE_TTL", "")
+	t.Setenv("CHALLENGE_STORE", "")
+	t.Setenv("REDIS_URL", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -51,6 +53,37 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.APNSKeyPath != "" || cfg.APNSKeyID != "" || cfg.APNSTeamID != "" || cfg.APNSTopic != "" {
 		t.Errorf("APNs fields should default empty, got path=%q id=%q team=%q topic=%q",
 			cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
+	}
+	if cfg.ChallengeStore != "memory" {
+		t.Errorf("ChallengeStore = %q, want memory", cfg.ChallengeStore)
+	}
+	if cfg.RedisURL != "" {
+		t.Errorf("RedisURL = %q, want empty string", cfg.RedisURL)
+	}
+}
+
+func TestLoad_ChallengeStoreRedisOverrides(t *testing.T) {
+	t.Setenv("CHALLENGE_STORE", "redis")
+	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.ChallengeStore != "redis" {
+		t.Errorf("ChallengeStore = %q, want redis", cfg.ChallengeStore)
+	}
+	if cfg.RedisURL != "redis://localhost:6379/0" {
+		t.Errorf("RedisURL = %q, want override", cfg.RedisURL)
+	}
+}
+
+func TestLoad_ChallengeStoreRedisRequiresRedisURL(t *testing.T) {
+	t.Setenv("CHALLENGE_STORE", "redis")
+	t.Setenv("REDIS_URL", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("Load() with CHALLENGE_STORE=redis and empty REDIS_URL should return an error")
 	}
 }
 
