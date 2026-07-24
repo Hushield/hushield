@@ -116,6 +116,46 @@ final class EnrollmentServiceTests: XCTestCase {
         XCTAssertEqual(tokenStore.loadKeyID(), "already-stored-key")
     }
 
+    // MARK: - enroll() after clearing enrollment state
+
+    /// Regression test for the keyID double-persistence defect: the real
+    /// providers (`DeviceAttestationProvider`, `SimulatorAttestationProvider`)
+    /// used to cache their own generated keyID in `UserDefaults`, independent
+    /// of `TokenStore`. `TokenStore.clear()` -- the API defined precisely to
+    /// reset enrollment -- only cleared the Keychain-backed store, not that
+    /// second cache. A subsequent `enroll()` would see `loadKeyID() == nil`,
+    /// call `provider.generateKeyID()`, and silently get back the exact same
+    /// stale keyID from the provider's own cache instead of a genuinely new
+    /// one -- defeating `clear()`.
+    ///
+    /// This exercises the real `SimulatorAttestationProvider` (not the dumb
+    /// mock, which never had this bug) so it actually reproduces the defect:
+    /// pre-fix, `secondKeyID == firstKeyID` and the assertion below fails;
+    /// post-fix, the provider no longer persists anything, so every
+    /// `generateKeyID()` call produces a fresh 32-byte random value.
+    func test_enroll_afterClear_generatesGenuinelyNewKeyID_withRealProvider() async throws {
+        let transport = MockTransport()
+        let challengeB64 = "Y2hhbGxlbmdl"
+        enqueueChallenge(transport, challenge: challengeB64, requestID: "req-c1")
+        enqueueDeviceToken(transport, token: "dtok-1", expiresAt: "2026-07-24T12:00:00Z", requestID: "req-t1")
+        enqueueChallenge(transport, challenge: challengeB64, requestID: "req-c2")
+        enqueueDeviceToken(transport, token: "dtok-2", expiresAt: "2026-07-25T12:00:00Z", requestID: "req-t2")
+
+        let provider = SimulatorAttestationProvider()
+        let tokenStore = InMemoryTokenStore()
+        let service = EnrollmentService(apiClient: makeClient(transport: transport), provider: provider, tokenStore: tokenStore)
+
+        try await service.enroll()
+        let firstKeyID = try XCTUnwrap(tokenStore.loadKeyID())
+
+        tokenStore.clear() // e.g. logout / reset-enrollment flow
+
+        try await service.enroll()
+        let secondKeyID = try XCTUnwrap(tokenStore.loadKeyID())
+
+        XCTAssertNotEqual(firstKeyID, secondKeyID, "clearing TokenStore must force a genuinely new key, not a stale keyID from an independent provider-side cache")
+    }
+
     // MARK: - refresh()
 
     func test_refresh_producesNewToken_viaAssert_persistsToken() async throws {

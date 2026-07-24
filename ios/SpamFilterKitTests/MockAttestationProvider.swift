@@ -25,10 +25,6 @@ final class MockAttestationProvider: AttestationProvider {
     private(set) var lastAttestClientDataHash: Data?
     private(set) var lastAssertClientDataHash: Data?
 
-    var isEnrolled: Bool { false }
-
-    func existingKeyID() -> String? { nil }
-
     func generateKeyID() async throws -> String {
         generateKeyIDCallCount += 1
         if let generateKeyIDError { throw generateKeyIDError }
