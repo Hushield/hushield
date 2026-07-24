@@ -56,9 +56,9 @@ struct SetupScreen: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text("Turn on protection")
-                .font(.title2.bold())
+                .font(Theme.Typography.screenTitle)
             Text("SpamFilter works through two iOS extensions. Enable both to block spam calls and texts.")
-                .font(.subheadline)
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.secondaryText)
         }
     }
@@ -71,10 +71,10 @@ struct SetupScreen: View {
                         .font(.title2)
                         .foregroundStyle(color)
                     Text(title)
-                        .font(.headline)
+                        .font(Theme.Typography.sectionTitle)
                 }
                 Text(blurb)
-                    .font(.subheadline)
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.secondaryText)
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
@@ -85,7 +85,7 @@ struct SetupScreen: View {
                                 .frame(width: 22, height: 22)
                                 .background(color, in: Circle())
                             Text(step)
-                                .font(.subheadline)
+                                .font(Theme.Typography.body)
                             Spacer(minLength: 0)
                         }
                     }

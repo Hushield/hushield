@@ -3,8 +3,9 @@ import Observation
 import SpamFilterKit
 
 /// Drives the Lookup screen: validates a number locally, then fetches its
-/// community reputation via `NumberLookup`. A 404 is treated as "no reports
-/// yet" rather than an error.
+/// community reputation via `NumberLookup`. The backend never 404s a lookup
+/// -- an absent number comes back as a normal 200 with `status: "unknown"`,
+/// which renders through the same `.loaded` phase.
 @MainActor
 @Observable
 final class LookupViewModel {
@@ -12,7 +13,6 @@ final class LookupViewModel {
         case idle
         case loading
         case loaded(NumberLookupData)
-        case notFound(number: String)
         case failed(message: String)
     }
 
@@ -41,8 +41,6 @@ final class LookupViewModel {
         do {
             let data = try await service.lookup(number: trimmed)
             phase = .loaded(data)
-        } catch let APIClientError.api(_, _, _, httpStatus) where httpStatus == 404 {
-            phase = .notFound(number: trimmed)
         } catch {
             phase = .failed(message: ServiceErrorText.message(for: error))
         }

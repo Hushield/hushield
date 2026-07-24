@@ -46,17 +46,6 @@ final class LookupViewModelTests: XCTestCase {
         XCTAssertTrue(service.lookedUpNumbers.isEmpty)
     }
 
-    func test_lookup_notFound_mapsToNotFoundPhase() async {
-        let service = FakeLookup()
-        service.error = APIClientError.api(code: "not_found", message: "no reports", field: nil, httpStatus: 404)
-        let vm = LookupViewModel(service: service)
-        vm.number = "+14155550100"
-
-        await vm.lookup()
-
-        XCTAssertEqual(vm.phase, .notFound(number: "+14155550100"))
-    }
-
     func test_lookup_networkError_setsFailedPhaseWithMessage() async {
         let service = FakeLookup()
         service.error = APIClientError.api(code: "internal_error", message: "boom", field: nil, httpStatus: 500)

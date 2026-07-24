@@ -50,17 +50,6 @@ struct LookupScreen: View {
                 .padding(.vertical, Theme.Spacing.xl)
         case let .loaded(data):
             reputationCard(data)
-        case let .notFound(number):
-            Card {
-                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    StatusBadge(level: .unknown, text: "No reports")
-                    Text(number)
-                        .font(.title3.weight(.semibold))
-                    Text("No community reports yet for this number. That's usually a good sign.")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.secondaryText)
-                }
-            }
         case let .failed(message):
             ErrorBanner(message: message)
         }
@@ -106,7 +95,7 @@ struct LookupScreen: View {
             Text(value)
                 .fontWeight(.medium)
         }
-        .font(.subheadline)
+        .font(Theme.Typography.body)
     }
 
     private func lookup() {

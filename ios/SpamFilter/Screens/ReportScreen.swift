@@ -45,9 +45,9 @@ struct ReportScreen: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text("Report a number")
-                .font(.title2.bold())
+                .font(Theme.Typography.screenTitle)
             Text("Help the community by flagging spam and scam callers.")
-                .font(.subheadline)
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.secondaryText)
         }
     }
@@ -55,7 +55,7 @@ struct ReportScreen: View {
     private var votePicker: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text("Your verdict")
-                .font(.caption.weight(.semibold))
+                .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
             Picker("Verdict", selection: $model.vote) {
                 ForEach(ReportViewModel.Vote.allCases) { vote in
@@ -69,7 +69,7 @@ struct ReportScreen: View {
     private var categoryPicker: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             Text("Category")
-                .font(.caption.weight(.semibold))
+                .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Theme.Spacing.sm) {
                 ForEach(ReportViewModel.Category.allCases) { category in
@@ -111,7 +111,7 @@ struct ReportScreen: View {
             Card {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     Label("Report submitted", systemImage: "checkmark.circle.fill")
-                        .font(.headline)
+                        .font(Theme.Typography.sectionTitle)
                         .foregroundStyle(Theme.safe)
                     HStack {
                         Text("Community status")

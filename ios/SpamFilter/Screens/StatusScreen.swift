@@ -41,11 +41,11 @@ struct StatusScreen: View {
                     .foregroundStyle(model.enrolled ? Theme.safe : Theme.warn)
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     Text(model.enrolled ? "Device enrolled" : "Not enrolled yet")
-                        .font(.headline)
+                        .font(Theme.Typography.sectionTitle)
                     Text(model.enrolled
                          ? "This device is registered and can sync the community blocklist."
                          : "Enrollment happens automatically the first time you sync or report.")
-                        .font(.subheadline)
+                        .font(Theme.Typography.body)
                         .foregroundStyle(Theme.secondaryText)
                 }
             }
@@ -68,7 +68,7 @@ struct StatusScreen: View {
                     .font(.system(size: 34, weight: .bold, design: .rounded))
                     .contentTransition(.numericText())
                 Text(label)
-                    .font(.subheadline)
+                    .font(Theme.Typography.body)
                     .foregroundStyle(Theme.secondaryText)
             }
         }
@@ -83,7 +83,7 @@ struct StatusScreen: View {
                 Text(lastSyncedText)
                     .fontWeight(.medium)
             }
-            .font(.subheadline)
+            .font(Theme.Typography.body)
         }
     }
 

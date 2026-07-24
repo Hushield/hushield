@@ -69,6 +69,24 @@ enum Theme {
         static let control: CGFloat = 12
         static let badge: CGFloat = 8
     }
+
+    // MARK: - Typography
+
+    /// Named font tokens for the sizes/weights already used across the app,
+    /// so screens reference one scale instead of repeating raw `Font` specs.
+    /// Each maps 1:1 to the font it replaces -- no visual change intended.
+    enum Typography {
+        /// Screen/section headers, e.g. "Report a number".
+        static let screenTitle: Font = .title2.bold()
+        /// Card/subsection headings, e.g. "Device enrolled".
+        static let sectionTitle: Font = .headline
+        /// Secondary/body copy under a title or label.
+        static let body: Font = .subheadline
+        /// Small uppercase field/section labels.
+        static let caption: Font = .caption.weight(.semibold)
+        /// Status badge / pill text.
+        static let badge: Font = .subheadline.weight(.semibold)
+    }
 }
 
 // MARK: - Light/dark color convenience

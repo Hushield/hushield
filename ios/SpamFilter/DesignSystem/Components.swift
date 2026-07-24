@@ -32,7 +32,7 @@ struct SectionCard<Content: View>: View {
             } icon: {
                 if let systemImage { Image(systemName: systemImage) }
             }
-            .font(.caption.weight(.semibold))
+            .font(Theme.Typography.caption)
             .foregroundStyle(Theme.secondaryText)
             .labelStyle(.titleAndIcon)
 
@@ -69,7 +69,7 @@ struct StatusBadge: View {
         } icon: {
             Image(systemName: level.symbol)
         }
-        .font(.subheadline.weight(.semibold))
+        .font(Theme.Typography.badge)
         .foregroundStyle(level.color)
         .padding(.horizontal, Theme.Spacing.sm + 2)
         .padding(.vertical, Theme.Spacing.xs + 2)
@@ -89,7 +89,7 @@ struct NumberField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "phone.fill")
@@ -118,7 +118,7 @@ struct LabeledTextField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
             TextField(placeholder, text: $text)
                 .autocorrectionDisabled()
@@ -178,9 +178,9 @@ struct EmptyStateView: View {
                 .font(.system(size: 42))
                 .foregroundStyle(Theme.accent.opacity(0.6))
             Text(title)
-                .font(.headline)
+                .font(Theme.Typography.sectionTitle)
             Text(message)
-                .font(.subheadline)
+                .font(Theme.Typography.body)
                 .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
         }
@@ -199,7 +199,7 @@ struct ErrorBanner: View {
         } icon: {
             Image(systemName: "exclamationmark.triangle.fill")
         }
-        .font(.subheadline)
+        .font(Theme.Typography.body)
         .foregroundStyle(Theme.danger)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Spacing.md - 2)
