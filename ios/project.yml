@@ -16,19 +16,100 @@ settings:
     DEVELOPMENT_TEAM: "997DW79YCR"
 
 targets:
+  SpamFilterKit:
+    type: framework
+    platform: iOS
+    sources:
+      - path: SpamFilterKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter.kit
+        PRODUCT_NAME: SpamFilterKit
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_ENTITLEMENTS: SpamFilterKit/SpamFilterKit.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+
   SpamFilter:
     type: application
     platform: iOS
     sources:
       - path: SpamFilter
+    dependencies:
+      - target: SpamFilterKit
+        embed: true
+      - target: CallDirectoryExtension
+        embed: true
+      - target: MessageFilterExtension
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: SpamFilter/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: SpamFilter
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_ENTITLEMENTS: SpamFilter/SpamFilter.entitlements
+        SPAMFILTER_API_BASE_URL: http://localhost:8080
+    scheme:
+      testTargets:
+        - SpamFilterKitTests
+        - SpamFilterUITests
+
+  CallDirectoryExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: CallDirectoryExtension
+    dependencies:
+      - target: SpamFilterKit
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter.CallDirectory
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: CallDirectoryExtension/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_ENTITLEMENTS: CallDirectoryExtension/CallDirectoryExtension.entitlements
+
+  MessageFilterExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: MessageFilterExtension
+    dependencies:
+      - target: SpamFilterKit
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter.MessageFilter
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: MessageFilterExtension/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_ENTITLEMENTS: MessageFilterExtension/MessageFilterExtension.entitlements
+
+  SpamFilterKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SpamFilterKitTests
+    dependencies:
+      - target: SpamFilterKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+
+  SpamFilterUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: SpamFilterUITests
+    dependencies:
+      - target: SpamFilter
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
