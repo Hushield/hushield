@@ -19,6 +19,7 @@ struct StatusScreen: View {
 
                     if case let .failed(message) = model.phase {
                         ErrorBanner(message: message)
+                            .accessibilityIdentifier("status.syncError")
                     }
 
                     Button("Sync now") { sync() }

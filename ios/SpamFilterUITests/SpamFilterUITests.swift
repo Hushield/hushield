@@ -110,13 +110,42 @@ final class SpamFilterUITests: XCTestCase {
 
         syncButton.tap()
 
-        // The fake syncer completes instantly and never fails: the button
-        // returns to its enabled, idle state and the last-synced row still
-        // renders.
+        // The default fake syncer (`-uitest`, no failure flag) completes
+        // instantly and succeeds: the button returns to its enabled, idle
+        // state, the last-synced row still renders, and -- the assertion
+        // that actually distinguishes this from a failure -- no error
+        // banner appears. Compare with `testStatusSyncFailure` below, which
+        // launches with the failure-injection flag and asserts the banner
+        // DOES appear; together these prove the two outcomes are
+        // distinguishable in the UI.
         let stillEnabled = NSPredicate(format: "isEnabled == true")
         expectation(for: stillEnabled, evaluatedWith: syncButton)
         waitForExpectations(timeout: 5)
 
         XCTAssertTrue(element("status.lastSynced").exists)
+        XCTAssertFalse(element("status.syncError").exists)
+    }
+
+    func testStatusSyncFailure() {
+        // Relaunch with the failure-injection flag so the fake syncer
+        // throws instead of the default always-succeeds behavior.
+        app.terminate()
+        app.launchArguments = ["-uitest", "-uitest-syncfail"]
+        app.launch()
+
+        app.tabBars.buttons["Status"].tap()
+
+        let syncButton = element("status.syncButton")
+        XCTAssertTrue(syncButton.waitForExistence(timeout: 5))
+
+        syncButton.tap()
+
+        let errorBanner = element("status.syncError")
+        XCTAssertTrue(errorBanner.waitForExistence(timeout: 5))
+
+        let stillEnabled = NSPredicate(format: "isEnabled == true")
+        expectation(for: stillEnabled, evaluatedWith: syncButton)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(errorBanner.exists)
     }
 }

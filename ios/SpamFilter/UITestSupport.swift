@@ -12,7 +12,16 @@ enum UITestSupport {
     static var isEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains("-uitest")
     }
+
+    /// When present alongside `-uitest`, wires a sync fake that always throws
+    /// instead of the always-succeeds default -- lets UI tests exercise the
+    /// Status screen's failure/error-banner path deterministically.
+    static var syncShouldFail: Bool {
+        ProcessInfo.processInfo.arguments.contains("-uitest-syncfail")
+    }
 }
+
+struct UITestSyncFailure: Error {}
 
 /// Always reports the number as "blocked", instantly.
 final class UITestReporting: Reporting {
@@ -35,9 +44,14 @@ final class UITestLookup: NumberLookup {
     }
 }
 
-/// Completes instantly and never fails.
+/// Completes instantly and never fails, unless `-uitest-syncfail` was passed
+/// at launch, in which case it always throws (see `UITestSupport.syncShouldFail`).
 final class UITestSyncing: Syncing {
-    func sync() async throws {}
+    func sync() async throws {
+        if UITestSupport.syncShouldFail {
+            throw UITestSyncFailure()
+        }
+    }
 }
 
 /// Reports a fixed enrolled/counts/last-synced state.
