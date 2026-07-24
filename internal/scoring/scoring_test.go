@@ -156,6 +156,15 @@ func TestScore(t *testing.T) {
 			wantTopCategory: "",
 		},
 		{
+			name: "negative device trust clamps at TrustMin (zero contribution)",
+			reports: []Report{
+				newReport(VoteSpam, CategoryScam, -5.0, 0),
+			},
+			wantStatus:      StatusUnknown,
+			wantScore:       0,
+			wantTopCategory: "",
+		},
+		{
 			name: "device trust clamps at TrustMax",
 			reports: []Report{
 				newReport(VoteSpam, CategoryScam, 10.0, 0), // above TrustMax, should clamp to 5.0

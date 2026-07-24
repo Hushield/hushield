@@ -64,6 +64,69 @@ func TestAssertEndpoint_RejectsReservedKeyID(t *testing.T) {
 	}
 }
 
+func TestAssertEndpoint_EmptyKeyID(t *testing.T) {
+	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
+
+	body := assertRequest{
+		KeyID:     "",
+		Assertion: base64.StdEncoding.EncodeToString([]byte("assertion")),
+		Challenge: base64.StdEncoding.EncodeToString([]byte("challenge")),
+	}
+	rec := doAssert(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "key_id" {
+		t.Errorf("errors = %+v, want single error on field=key_id", errs)
+	}
+}
+
+func TestAssertEndpoint_BadBase64Assertion(t *testing.T) {
+	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
+
+	body := assertRequest{
+		KeyID:     "somekey",
+		Assertion: "not-valid-base64!!!",
+		Challenge: base64.StdEncoding.EncodeToString([]byte("challenge")),
+	}
+	rec := doAssert(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "assertion" {
+		t.Errorf("errors = %+v, want single error on field=assertion", errs)
+	}
+}
+
+func TestAssertEndpoint_BadBase64Challenge(t *testing.T) {
+	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
+
+	body := assertRequest{
+		KeyID:     "somekey",
+		Assertion: base64.StdEncoding.EncodeToString([]byte("assertion")),
+		Challenge: "not-valid-base64!!!",
+	}
+	rec := doAssert(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "challenge" {
+		t.Errorf("errors = %+v, want single error on field=challenge", errs)
+	}
+}
+
 func TestAssertEndpoint_InvalidChallenge(t *testing.T) {
 	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
 

@@ -296,3 +296,163 @@ func TestDefaultAppleRoots_Parses(t *testing.T) {
 		t.Fatal("DefaultAppleRoots returned nil")
 	}
 }
+
+// buildCredCertWithExtensions builds a fresh device key + credCert (signed by
+// a fresh, self-issued intermediate under its own root) carrying whatever
+// extraExtensions the caller supplies in place of the usual nonce extension,
+// so nonceFromCert's error branches (missing/malformed/trailing-bytes) can be
+// exercised directly, independent of VerifyAttestation's other steps.
+func buildCredCertWithExtensions(t *testing.T, extraExtensions []pkix.Extension) *x509.Certificate {
+	t.Helper()
+	now := time.Now()
+
+	rootKey := mustGenKey(t)
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test Root"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatalf("parse root: %v", err)
+	}
+
+	credKey := mustGenKey(t)
+	credTmpl := &x509.Certificate{
+		SerialNumber:    big.NewInt(2),
+		Subject:         pkix.Name{CommonName: "Test Cred"},
+		NotBefore:       now.Add(-time.Hour),
+		NotAfter:        now.Add(24 * time.Hour),
+		ExtraExtensions: extraExtensions,
+	}
+	credDER, err := x509.CreateCertificate(rand.Reader, credTmpl, rootCert, &credKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatalf("create credCert: %v", err)
+	}
+	credCert, err := x509.ParseCertificate(credDER)
+	if err != nil {
+		t.Fatalf("parse credCert: %v", err)
+	}
+	return credCert
+}
+
+func TestNonceFromCert_ExtensionNotFound(t *testing.T) {
+	cert := buildCredCertWithExtensions(t, nil)
+	if _, err := nonceFromCert(cert); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+func TestNonceFromCert_MalformedASN1(t *testing.T) {
+	cert := buildCredCertWithExtensions(t, []pkix.Extension{
+		{Id: oidAppAttestNonce, Value: []byte("not valid asn1 at all")},
+	})
+	if _, err := nonceFromCert(cert); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+func TestNonceFromCert_TrailingBytes(t *testing.T) {
+	nonce := sha256.Sum256([]byte("some nonce"))
+	valid, err := asn1.Marshal(nonceExtension{Nonce: nonce[:]})
+	if err != nil {
+		t.Fatalf("marshal nonce ext: %v", err)
+	}
+	withTrailing := append(valid, 0xDE, 0xAD, 0xBE, 0xEF)
+	cert := buildCredCertWithExtensions(t, []pkix.Extension{
+		{Id: oidAppAttestNonce, Value: withTrailing},
+	})
+	if _, err := nonceFromCert(cert); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+func TestValidateAuthData_TooShort(t *testing.T) {
+	f := buildValidAttestation(t)
+	v := NewAppleVerifier(testAppID, f.roots)
+	if err := v.validateAuthData(f.authData[:10], f.keyIDBytes); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+func TestValidateAuthData_UnexpectedAAGUID(t *testing.T) {
+	f := buildValidAttestation(t)
+	v := NewAppleVerifier(testAppID, f.roots)
+	badAuthData := buildAuthData(testAppID, []byte("not-a-known-aaguid"), f.keyIDBytes)
+	if err := v.validateAuthData(badAuthData, f.keyIDBytes); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+func TestValidateAuthData_CredentialIDLongerThanAuthData(t *testing.T) {
+	f := buildValidAttestation(t)
+	v := NewAppleVerifier(testAppID, f.roots)
+	// authData declares a 16-byte credentialId (credIdLen) but the buffer
+	// actually ends right after the length field, so authData is shorter than
+	// the declared credentialId.
+	rpIDHash := sha256.Sum256([]byte(testAppID))
+	buf := bytes.Buffer{}
+	buf.Write(rpIDHash[:])
+	buf.WriteByte(0x00)
+	buf.Write([]byte{0, 0, 0, 0})
+	buf.Write(aaguidProd)
+	buf.Write([]byte{0, 16}) // declares 16 bytes of credentialId
+	// ... but no credentialId bytes follow.
+	if err := v.validateAuthData(buf.Bytes(), f.keyIDBytes); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+func TestValidateAuthData_CredentialIDMismatch(t *testing.T) {
+	f := buildValidAttestation(t)
+	v := NewAppleVerifier(testAppID, f.roots)
+	wrongCredID := sha256.Sum256([]byte("not the right key"))
+	badAuthData := buildAuthData(testAppID, aaguidProd, wrongCredID[:])
+	if err := v.validateAuthData(badAuthData, f.keyIDBytes); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+// TestAppleVerifier_ParseCredCertFails confirms an unparsable X5C[0] entry
+// (malformed DER) is rejected before any chain verification is attempted.
+func TestAppleVerifier_ParseCredCertFails(t *testing.T) {
+	f := buildValidAttestation(t)
+	att, err := cbor.Marshal(attestationObject{
+		Fmt:      "apple-appattest",
+		AttStmt:  attestStatement{X5C: [][]byte{[]byte("not a real certificate"), f.interCertDER}, Receipt: f.receipt},
+		AuthData: f.authData,
+	})
+	if err != nil {
+		t.Fatalf("cbor marshal: %v", err)
+	}
+	v := NewAppleVerifier(testAppID, f.roots)
+	if _, _, err := v.VerifyAttestation(context.Background(), f.keyID, att, f.challenge); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}
+
+// TestAppleVerifier_ParseIntermediateFails confirms an unparsable X5C[1]
+// entry (malformed DER) is rejected before chain verification.
+func TestAppleVerifier_ParseIntermediateFails(t *testing.T) {
+	f := buildValidAttestation(t)
+	att, err := cbor.Marshal(attestationObject{
+		Fmt:      "apple-appattest",
+		AttStmt:  attestStatement{X5C: [][]byte{f.credCertDER, []byte("not a real certificate")}, Receipt: f.receipt},
+		AuthData: f.authData,
+	})
+	if err != nil {
+		t.Fatalf("cbor marshal: %v", err)
+	}
+	v := NewAppleVerifier(testAppID, f.roots)
+	if _, _, err := v.VerifyAttestation(context.Background(), f.keyID, att, f.challenge); !errors.Is(err, ErrAttestationInvalid) {
+		t.Errorf("err = %v, want ErrAttestationInvalid", err)
+	}
+}

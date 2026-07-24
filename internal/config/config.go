@@ -30,6 +30,13 @@ type Config struct {
 	DeviceTokenTTL time.Duration
 	// ChallengeTTL is how long an issued attestation challenge remains valid.
 	ChallengeTTL time.Duration
+	// ChallengeStore selects the attestation ChallengeStore backend: "memory"
+	// (default, process-local) or "redis" (shared, required for a
+	// multi-instance deployment).
+	ChallengeStore string
+	// RedisURL is the Redis connection URL (e.g. redis://localhost:6379/0),
+	// used when ChallengeStore == "redis".
+	RedisURL string
 
 	// APNSKeyPath is the filesystem path to the Apple token-based auth key
 	// (.p8, PKCS8 EC private key). When empty, silent-push is disabled and a
@@ -58,6 +65,8 @@ const (
 
 	defaultDeviceTokenTTL = 720 * time.Hour // 30 days
 	defaultChallengeTTL   = 5 * time.Minute
+
+	defaultChallengeStore = "memory"
 )
 
 // Load reads configuration from environment variables, falling back to
@@ -79,14 +88,28 @@ func Load() (Config, error) {
 		DeviceTokenSecretIsDefault: secretIsDefault,
 		DeviceTokenTTL:             getEnvDuration("DEVICE_TOKEN_TTL", defaultDeviceTokenTTL),
 		ChallengeTTL:               getEnvDuration("CHALLENGE_TTL", defaultChallengeTTL),
+		ChallengeStore:             getEnv("CHALLENGE_STORE", defaultChallengeStore),
+		RedisURL:                   getEnv("REDIS_URL", ""),
 		APNSKeyPath:                getEnv("APNS_KEY_PATH", ""),
 		APNSKeyID:                  getEnv("APNS_KEY_ID", ""),
 		APNSTeamID:                 getEnv("APNS_TEAM_ID", ""),
 		APNSTopic:                  getEnv("APNS_TOPIC", ""),
 	}
 
-	if cfg.AttestMode == "apple" && cfg.AppID == "" {
-		return Config{}, fmt.Errorf("config: APP_ID is required when ATTEST_MODE=apple")
+	if cfg.AttestMode == "apple" {
+		if cfg.AppID == "" {
+			return Config{}, fmt.Errorf("config: APP_ID is required when ATTEST_MODE=apple")
+		}
+		if cfg.DeviceTokenSecret == devDefaultTokenSecret {
+			return Config{}, fmt.Errorf("config: DEVICE_TOKEN_SECRET must be set to a strong, unique secret when ATTEST_MODE=apple (insecure dev default detected); generate one with `openssl rand -hex 32`")
+		}
+		if cfg.AdminToken == "" {
+			return Config{}, fmt.Errorf("config: ADMIN_TOKEN is required when ATTEST_MODE=apple (must not leave admin routes unauthenticated in production)")
+		}
+	}
+
+	if cfg.ChallengeStore == "redis" && cfg.RedisURL == "" {
+		return Config{}, fmt.Errorf("config: REDIS_URL is required when CHALLENGE_STORE=redis")
 	}
 
 	return cfg, nil

@@ -37,6 +37,7 @@ func TestRequireDevice(t *testing.T) {
 		{"no bearer prefix", validToken, http.StatusUnauthorized, 0},
 		{"garbage token", "Bearer not-a-real-token", http.StatusUnauthorized, 0},
 		{"empty bearer", "Bearer ", http.StatusUnauthorized, 0},
+		{"whitespace-only bearer", "Bearer    ", http.StatusUnauthorized, 0},
 		{"expired token", "Bearer " + expiredToken, http.StatusUnauthorized, 0},
 		{"wrong secret", "Bearer " + wrongSecretToken, http.StatusUnauthorized, 0},
 	}

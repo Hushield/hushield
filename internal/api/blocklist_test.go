@@ -133,6 +133,90 @@ func TestBlocklistEndpoint_InvalidPrefixLength(t *testing.T) {
 	}
 }
 
+func TestParseSinceParam(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantSec int64
+		wantID  uint64
+	}{
+		{"empty", "", 0, 0},
+		{"zero", "0", 0, 0},
+		{"no dot", "12345", 0, 0},
+		{"negative sec", "-5.10", 0, 0},
+		{"non-numeric sec", "abc.10", 0, 0},
+		{"non-numeric id", "100.xyz", 0, 0},
+		{"valid compound cursor", "1700000000.42", 1700000000, 42},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sec, id := parseSinceParam(tc.raw)
+			if sec != tc.wantSec || id != tc.wantID {
+				t.Errorf("parseSinceParam(%q) = (%d, %d), want (%d, %d)", tc.raw, sec, id, tc.wantSec, tc.wantID)
+			}
+		})
+	}
+}
+
+func TestIsValidBlocklistPrefix(t *testing.T) {
+	cases := []struct {
+		prefix string
+		want   bool
+	}{
+		{"415555", true},
+		{"000000", true},
+		{"41555", false},
+		{"4155555", false},
+		{"41555a", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := isValidBlocklistPrefix(tc.prefix); got != tc.want {
+			t.Errorf("isValidBlocklistPrefix(%q) = %v, want %v", tc.prefix, got, tc.want)
+		}
+	}
+}
+
+func TestParseLimitParam(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"empty defaults", "", defaultBlocklistLimit},
+		{"non-numeric defaults", "abc", defaultBlocklistLimit},
+		{"zero defaults", "0", defaultBlocklistLimit},
+		{"negative defaults", "-5", defaultBlocklistLimit},
+		{"within range", "100", 100},
+		{"above max clamps", "5000", maxBlocklistLimit},
+		{"exactly max", "1000", maxBlocklistLimit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseLimitParam(tc.raw); got != tc.want {
+				t.Errorf("parseLimitParam(%q) = %d, want %d", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBlocklistEndpoint_StoreError_500 confirms handleList surfaces
+// store.BlocklistDelta's error (a closed DB) as a 500.
+func TestBlocklistEndpoint_StoreError_500(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	database.Close()
+
+	h := &blocklistHandler{db: database}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/blocklist", nil)
+	req = req.WithContext(deviceCtx(1))
+	rec := httptest.NewRecorder()
+	h.handleList(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+}
+
 func TestBlocklistEndpoint_DB(t *testing.T) {
 	database := dbtest.SetupDB(t)
 

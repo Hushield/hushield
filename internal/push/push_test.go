@@ -2,7 +2,14 @@ package push
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"spamfilter/internal/store"
@@ -67,5 +74,50 @@ func TestNewNotifier_NoCredsIsNoop(t *testing.T) {
 	}
 	if _, ok := n.(NoopNotifier); !ok {
 		t.Errorf("notifier is %T, want NoopNotifier when creds absent", n)
+	}
+}
+
+// TestNewNotifier_WithValidCredsIsReal confirms NewNotifier returns a real
+// (non-noop) APNsNotifier and real=true when a valid key path is supplied.
+func TestNewNotifier_WithValidCredsIsReal(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal pkcs8: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	path := filepath.Join(t.TempDir(), "AuthKey_TEST.p8")
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatalf("write p8: %v", err)
+	}
+
+	n, real, err := NewNotifier(path, "KEYID", "TEAMID", "com.example.app")
+	if err != nil {
+		t.Fatalf("NewNotifier: %v", err)
+	}
+	if !real {
+		t.Errorf("real = false, want true when creds are present and valid")
+	}
+	if _, ok := n.(*APNsNotifier); !ok {
+		t.Errorf("notifier is %T, want *APNsNotifier", n)
+	}
+}
+
+// TestNewNotifier_BadCredsPropagatesError confirms a present-but-invalid key
+// path propagates the underlying error rather than silently degrading to a
+// Noop notifier.
+func TestNewNotifier_BadCredsPropagatesError(t *testing.T) {
+	n, real, err := NewNotifier(filepath.Join(t.TempDir(), "does-not-exist.p8"), "KEYID", "TEAMID", "com.example.app")
+	if err == nil {
+		t.Fatal("NewNotifier: want error for missing key file, got nil")
+	}
+	if real {
+		t.Errorf("real = true, want false on error")
+	}
+	if n != nil {
+		t.Errorf("notifier = %v, want nil on error", n)
 	}
 }

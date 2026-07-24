@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  scripts/com.brahy.spamfilter.recompute.plist -- launchd job running the
+  built `recompute` one-shot binary every 15 minutes (StartInterval 900s),
+  matching the "*/15 * * * *" cadence documented at the top of
+  cmd/recompute/main.go.
+
+  Install (per-user LaunchAgent):
+    cp scripts/com.brahy.spamfilter.recompute.plist \
+      ~/Library/LaunchAgents/com.brahy.spamfilter.recompute.plist
+    # edit the placeholder paths/env below first, then:
+    launchctl load ~/Library/LaunchAgents/com.brahy.spamfilter.recompute.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.brahy.spamfilter.recompute.plist
+
+  Run once immediately (for testing), without waiting for StartInterval:
+    launchctl start com.brahy.spamfilter.recompute
+
+  Note: this plist runs the one-shot binary (no -interval flag) on
+  launchd's own schedule. If instead you want the binary to self-schedule
+  under a supervisor, run it with -interval=15m and drop StartInterval
+  (use RunAtLoad + KeepAlive) -- see cmd/recompute/main.go.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.brahy.spamfilter.recompute</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/path/to/recompute</string>
+	</array>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>DB_DSN</key>
+		<string>spamfilter@tcp(127.0.0.1:3306)/spamfilter?parseTime=true&amp;multiStatements=true</string>
+	</dict>
+
+	<key>StartInterval</key>
+	<integer>900</integer>
+
+	<key>RunAtLoad</key>
+	<false/>
+
+	<key>StandardOutPath</key>
+	<string>/var/log/spamfilter-recompute.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>/var/log/spamfilter-recompute.err.log</string>
+</dict>
+</plist>

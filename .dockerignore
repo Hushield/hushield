@@ -1,0 +1,25 @@
+# Keep the Go build context small and avoid leaking local/dev artifacts.
+
+# The iOS app tree is not part of the Go server image.
+ios/
+
+# VCS / tooling
+.git
+.gitignore
+.superpowers/
+.planning/
+
+# Build output / local binaries
+bin/
+
+# Env / secrets — never bake these into an image.
+.env
+.env.example
+credentials.md
+
+# Docs and noise not needed inside the image.
+*.md
+docs/
+
+# Local dev scripts unrelated to the runtime image.
+scripts/

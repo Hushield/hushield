@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,6 +69,154 @@ func TestChallengeEndpoint_ReturnsChallenge(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, payload.ExpiresAt); err != nil {
 		t.Errorf("expires_at not RFC3339: %v", err)
+	}
+}
+
+// TestAttestHandler_CustomClock confirms handleChallenge uses the handler's
+// injected clock (rather than time.Now) when one is set, by asserting the
+// returned expires_at matches challengeTTL added to the injected time exactly.
+func TestAttestHandler_CustomClock(t *testing.T) {
+	fixed := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	h := &attestHandler{
+		store:        attest.NewMemoryChallengeStore(),
+		verifier:     attest.NewMockVerifier(nil, nil),
+		signer:       token.NewSigner([]byte("clock-test-secret")),
+		challengeTTL: 5 * time.Minute,
+		now:          func() time.Time { return fixed },
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/attest/challenge", nil)
+	req = req.WithContext(reqCtx())
+	rec := httptest.NewRecorder()
+	h.handleChallenge(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	_, data := decodeEnvelope(t, rec.Body.Bytes())
+	var payload challengeResponse
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := fixed.Add(5 * time.Minute).UTC().Format(time.RFC3339)
+	if payload.ExpiresAt != want {
+		t.Errorf("expires_at = %q, want %q (derived from the injected clock)", payload.ExpiresAt, want)
+	}
+}
+
+// errorChallengeStore is a ChallengeStore whose Issue always fails, used to
+// exercise handleChallenge's internal-error branch.
+type errorChallengeStore struct{ attest.ChallengeStore }
+
+func (errorChallengeStore) Issue(now time.Time, ttl time.Duration) ([]byte, error) {
+	return nil, errors.New("boom: store unavailable")
+}
+
+func TestChallengeEndpoint_StoreError_500(t *testing.T) {
+	h := newTestHandler(errorChallengeStore{}, attest.NewMockVerifier(nil, nil), nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/attest/challenge", nil)
+	req = req.WithContext(reqCtx())
+	rec := httptest.NewRecorder()
+	h.handleChallenge(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestVerifyEndpoint_EmptyKeyID(t *testing.T) {
+	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
+
+	body := verifyRequest{
+		KeyID:       "",
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString([]byte("challenge")),
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "key_id" {
+		t.Errorf("errors = %+v, want single error on field=key_id", errs)
+	}
+}
+
+func TestVerifyEndpoint_BadBase64Attestation(t *testing.T) {
+	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
+
+	body := verifyRequest{
+		KeyID:       "somekey",
+		Attestation: "not-valid-base64!!!",
+		Challenge:   base64.StdEncoding.EncodeToString([]byte("challenge")),
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "attestation" {
+		t.Errorf("errors = %+v, want single error on field=attestation", errs)
+	}
+}
+
+func TestVerifyEndpoint_EmptyAttestation(t *testing.T) {
+	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
+
+	body := verifyRequest{
+		KeyID:       "somekey",
+		Attestation: "",
+		Challenge:   base64.StdEncoding.EncodeToString([]byte("challenge")),
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestVerifyEndpoint_BadBase64Challenge(t *testing.T) {
+	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
+
+	body := verifyRequest{
+		KeyID:       "somekey",
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   "not-valid-base64!!!",
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "challenge" {
+		t.Errorf("errors = %+v, want single error on field=challenge", errs)
+	}
+}
+
+func TestUpsertDevice_NilDB(t *testing.T) {
+	if _, err := upsertDevice(context.Background(), nil, "key", []byte("pub"), []byte("receipt"), time.Now()); err == nil {
+		t.Fatal("upsertDevice: want error for nil db, got nil")
+	}
+}
+
+// TestUpsertDevice_ClosedDB confirms upsertDevice propagates the underlying
+// ExecContext error for a real (non-nil) but closed DB, distinct from the
+// nil-db guard above.
+func TestUpsertDevice_ClosedDB(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	database.Close()
+
+	if _, err := upsertDevice(context.Background(), database, "key", []byte("pub"), []byte("receipt"), time.Now()); err == nil {
+		t.Fatal("upsertDevice: want error for closed db, got nil")
 	}
 }
 

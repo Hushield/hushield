@@ -1,8 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +131,47 @@ func TestWriteError_MultipleErrors(t *testing.T) {
 	}
 	if len(env.Errors) != 2 {
 		t.Fatalf("len(errors) = %d, want 2", len(env.Errors))
+	}
+}
+
+// TestWriteError_NoErrorsStillProducesEmptyArray confirms WriteError's nil
+// -> []APIError{} defaulting (for a caller that passes zero error values)
+// still serializes errors as an empty JSON array, never a JSON null.
+func TestWriteError_NoErrorsStillProducesEmptyArray(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	WriteError(rec, 500, "req-nil-errs")
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if string(raw["errors"]) != "[]" {
+		t.Errorf("errors = %s, want [] (never null, even with zero error values)", raw["errors"])
+	}
+}
+
+// TestLogInternalError_WritesRequestIDActionAndErr confirms logInternalError
+// records the request id, action, and underlying error in the log line, so a
+// 500 response's cause is traceable server-side even though the client-facing
+// envelope never includes it.
+func TestLogInternalError_WritesRequestIDActionAndErr(t *testing.T) {
+	var buf bytes.Buffer
+	origOutput := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(origOutput)
+		log.SetFlags(origFlags)
+	})
+
+	logInternalError("req-log-123", "save report", errors.New("boom: connection reset"))
+
+	line := buf.String()
+	for _, want := range []string{"req-log-123", "save report", "boom: connection reset"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line = %q, want it to contain %q", line, want)
+		}
 	}
 }

@@ -5,11 +5,13 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -202,6 +204,114 @@ func verifyES256JWT(t *testing.T, jwt string, pub *ecdsa.PublicKey) {
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if !ecdsa.Verify(pub, digest[:], r, s) {
 		t.Error("raw R‖S signature does not verify against the test public key")
+	}
+}
+
+func TestNewAPNsNotifier_Errors(t *testing.T) {
+	t.Run("missing file", func(t *testing.T) {
+		_, err := NewAPNsNotifier(filepath.Join(t.TempDir(), "nope.p8"), "kid", "tid", "topic")
+		if err == nil {
+			t.Fatal("want error for missing file, got nil")
+		}
+	})
+
+	t.Run("not PEM", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "not-pem.p8")
+		if err := os.WriteFile(path, []byte("this is not a pem file"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_, err := NewAPNsNotifier(path, "kid", "tid", "topic")
+		if err == nil {
+			t.Fatal("want error for non-PEM content, got nil")
+		}
+	})
+
+	t.Run("not PKCS8", func(t *testing.T) {
+		// A well-formed PEM block whose payload is not a valid PKCS8 key.
+		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("not-a-real-pkcs8-payload")})
+		path := filepath.Join(t.TempDir(), "bad-pkcs8.p8")
+		if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_, err := NewAPNsNotifier(path, "kid", "tid", "topic")
+		if err == nil {
+			t.Fatal("want error for malformed PKCS8 payload, got nil")
+		}
+	})
+
+	t.Run("non-ECDSA key", func(t *testing.T) {
+		rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("generate rsa key: %v", err)
+		}
+		der, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+		if err != nil {
+			t.Fatalf("marshal pkcs8: %v", err)
+		}
+		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+		path := filepath.Join(t.TempDir(), "rsa.p8")
+		if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_, err = NewAPNsNotifier(path, "kid", "tid", "topic")
+		if err == nil {
+			t.Fatal("want error for non-ECDSA key, got nil")
+		}
+		if !strings.Contains(err.Error(), "*ecdsa.PrivateKey") {
+			t.Errorf("error = %v, want it to mention *ecdsa.PrivateKey", err)
+		}
+	})
+}
+
+// TestAPNsNotifier_DefaultClockUsesRealTime confirms clock() falls back to
+// time.Now when now is unset (the zero-value APNsNotifier field), by
+// checking the JWT's iat claim lands within a few seconds of the real clock.
+func TestAPNsNotifier_DefaultClockUsesRealTime(t *testing.T) {
+	doer := &fakeDoer{status: http.StatusOK}
+	n, pub := newTestNotifier(t, doer)
+	n.now = nil // exercise the default (real time.Now) branch of clock()
+
+	target := store.PushTarget{DeviceID: 1, Token: "tok", Environment: "production"}
+	if err := n.SendSilentRefresh(context.Background(), target); err != nil {
+		t.Fatalf("SendSilentRefresh: %v", err)
+	}
+	jwt := strings.TrimPrefix(doer.gotReq.Header.Get("authorization"), "bearer ")
+	verifyES256JWT(t, jwt, pub)
+}
+
+// TestAPNsNotifier_RequestError confirms a transport-level failure (the
+// underlying http.Client.Do returning an error, e.g. DNS/connection refused)
+// is wrapped and returned rather than swallowed.
+func TestAPNsNotifier_RequestError(t *testing.T) {
+	n, _ := newTestNotifier(t, &erroringDoer{})
+	err := n.SendSilentRefresh(context.Background(), store.PushTarget{DeviceID: 1, Token: "x", Environment: "production"})
+	if err == nil {
+		t.Fatal("SendSilentRefresh: want error when the transport fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "apns request") {
+		t.Errorf("error = %v, want it to mention 'apns request'", err)
+	}
+}
+
+type erroringDoer struct{}
+
+func (erroringDoer) Do(req *http.Request) (*http.Response, error) {
+	return nil, errors.New("simulated transport failure")
+}
+
+// TestApnsReason_FallsBackToRawBodyForNonJSON confirms apnsReason falls back
+// to the trimmed raw body when the APNs error body isn't the expected
+// {"reason": "..."} JSON shape.
+func TestApnsReason_FallsBackToRawBodyForNonJSON(t *testing.T) {
+	doer := &fakeDoer{status: http.StatusBadGateway, body: "  not json at all  "}
+	n, _ := newTestNotifier(t, doer)
+
+	err := n.SendSilentRefresh(context.Background(), store.PushTarget{DeviceID: 1, Token: "x", Environment: "production"})
+	if err == nil {
+		t.Fatal("want error for non-2xx status")
+	}
+	if !strings.Contains(err.Error(), "not json at all") {
+		t.Errorf("error = %v, want fallback raw body 'not json at all'", err)
 	}
 }
 

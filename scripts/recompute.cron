@@ -1,0 +1,12 @@
+# scripts/recompute.cron -- crontab example for the recompute one-shot
+# binary, matching the "*/15 * * * *" cadence documented at the top of
+# cmd/recompute/main.go.
+#
+# Install:
+#   crontab -e
+#   # paste the line below (edit the path, DB_DSN, and log path first)
+#
+# Or install non-interactively for the current user:
+#   (crontab -l 2>/dev/null; cat scripts/recompute.cron) | crontab -
+
+*/15 * * * * DB_DSN='spamfilter@tcp(127.0.0.1:3306)/spamfilter?parseTime=true&multiStatements=true' /path/to/recompute >> /var/log/spamfilter-recompute.log 2>&1

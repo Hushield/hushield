@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,6 +15,8 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("DEVICE_TOKEN_SECRET", "")
 	t.Setenv("DEVICE_TOKEN_TTL", "")
 	t.Setenv("CHALLENGE_TTL", "")
+	t.Setenv("CHALLENGE_STORE", "")
+	t.Setenv("REDIS_URL", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -52,6 +55,37 @@ func TestLoad_Defaults(t *testing.T) {
 		t.Errorf("APNs fields should default empty, got path=%q id=%q team=%q topic=%q",
 			cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
 	}
+	if cfg.ChallengeStore != "memory" {
+		t.Errorf("ChallengeStore = %q, want memory", cfg.ChallengeStore)
+	}
+	if cfg.RedisURL != "" {
+		t.Errorf("RedisURL = %q, want empty string", cfg.RedisURL)
+	}
+}
+
+func TestLoad_ChallengeStoreRedisOverrides(t *testing.T) {
+	t.Setenv("CHALLENGE_STORE", "redis")
+	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.ChallengeStore != "redis" {
+		t.Errorf("ChallengeStore = %q, want redis", cfg.ChallengeStore)
+	}
+	if cfg.RedisURL != "redis://localhost:6379/0" {
+		t.Errorf("RedisURL = %q, want override", cfg.RedisURL)
+	}
+}
+
+func TestLoad_ChallengeStoreRedisRequiresRedisURL(t *testing.T) {
+	t.Setenv("CHALLENGE_STORE", "redis")
+	t.Setenv("REDIS_URL", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("Load() with CHALLENGE_STORE=redis and empty REDIS_URL should return an error")
+	}
 }
 
 func TestLoad_APNSOverrides(t *testing.T) {
@@ -82,6 +116,7 @@ func TestLoad_AttestOverrides(t *testing.T) {
 	t.Setenv("ATTEST_MODE", "apple")
 	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
 	t.Setenv("DEVICE_TOKEN_SECRET", "a-real-secret")
+	t.Setenv("ADMIN_TOKEN", "super-secret-admin-token")
 	t.Setenv("DEVICE_TOKEN_TTL", "48h")
 	t.Setenv("CHALLENGE_TTL", "90s")
 
@@ -116,6 +151,75 @@ func TestLoad_AppleModeRequiresAppID(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatalf("Load() with mode=apple and empty APP_ID should return an error")
+	}
+}
+
+func TestLoad_AppleModeSucceedsWithSecurePosture(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "apple")
+	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
+	t.Setenv("DEVICE_TOKEN_SECRET", "a-real-strong-secret-value")
+	t.Setenv("ADMIN_TOKEN", "a-real-admin-token")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() with secure apple posture returned error: %v", err)
+	}
+}
+
+func TestLoad_AppleModeRequiresNonDefaultDeviceTokenSecret(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "apple")
+	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
+	t.Setenv("ADMIN_TOKEN", "a-real-admin-token")
+	t.Setenv("DEVICE_TOKEN_SECRET", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() with mode=apple and unset DEVICE_TOKEN_SECRET should return an error")
+	}
+	if !strings.Contains(err.Error(), "DEVICE_TOKEN_SECRET") {
+		t.Errorf("error = %q, want it to name DEVICE_TOKEN_SECRET", err.Error())
+	}
+
+	// Also reject an explicit value equal to the known-insecure dev default.
+	t.Setenv("DEVICE_TOKEN_SECRET", devDefaultTokenSecret)
+	_, err = Load()
+	if err == nil {
+		t.Fatalf("Load() with mode=apple and DEVICE_TOKEN_SECRET set to the insecure dev default should return an error")
+	}
+	if !strings.Contains(err.Error(), "DEVICE_TOKEN_SECRET") {
+		t.Errorf("error = %q, want it to name DEVICE_TOKEN_SECRET", err.Error())
+	}
+}
+
+func TestLoad_AppleModeRequiresAdminToken(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "apple")
+	t.Setenv("APP_ID", "ABCDE12345.com.example.spamfilter")
+	t.Setenv("DEVICE_TOKEN_SECRET", "a-real-strong-secret-value")
+	t.Setenv("ADMIN_TOKEN", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() with mode=apple and empty ADMIN_TOKEN should return an error")
+	}
+	if !strings.Contains(err.Error(), "ADMIN_TOKEN") {
+		t.Errorf("error = %q, want it to name ADMIN_TOKEN", err.Error())
+	}
+}
+
+func TestLoad_MockModeAllowsInsecureDefaults(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "mock")
+	t.Setenv("DEVICE_TOKEN_SECRET", "")
+	t.Setenv("ADMIN_TOKEN", "")
+	t.Setenv("APP_ID", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() in mock mode with insecure defaults returned error: %v", err)
+	}
+	if !cfg.DeviceTokenSecretIsDefault {
+		t.Errorf("DeviceTokenSecretIsDefault = false, want true in mock mode with unset secret")
+	}
+	if cfg.AdminToken != "" {
+		t.Errorf("AdminToken = %q, want empty", cfg.AdminToken)
 	}
 }
 

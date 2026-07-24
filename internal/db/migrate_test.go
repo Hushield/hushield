@@ -1,11 +1,49 @@
 package db_test
 
 import (
+	"strings"
 	"testing"
 
 	"spamfilter/internal/db"
 	"spamfilter/internal/dbtest"
 )
+
+// TestMigrate_ClosedDBReturnsError confirms Migrate propagates the
+// underlying error (rather than panicking) when the DB connection can't even
+// create the schema_migrations bookkeeping table.
+func TestMigrate_ClosedDBReturnsError(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	sqlDB.Close()
+
+	if err := db.Migrate(sqlDB); err == nil {
+		t.Fatal("Migrate: want error on a closed DB, got nil")
+	}
+}
+
+// TestMigrate_IncompatibleExistingTableReturnsError confirms Migrate
+// propagates an error when schema_migrations already exists but with a
+// shape appliedVersions can't query (here, missing the "version" column) --
+// distinct from the schema_migrations-table-creation failure above, since
+// CREATE TABLE IF NOT EXISTS is a no-op against the pre-existing table and
+// the failure instead comes from the subsequent SELECT.
+func TestMigrate_IncompatibleExistingTableReturnsError(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+
+	if _, err := sqlDB.Exec("DROP TABLE schema_migrations"); err != nil {
+		t.Fatalf("drop schema_migrations: %v", err)
+	}
+	if _, err := sqlDB.Exec("CREATE TABLE schema_migrations (id INT PRIMARY KEY)"); err != nil {
+		t.Fatalf("create incompatible schema_migrations: %v", err)
+	}
+
+	err := db.Migrate(sqlDB)
+	if err == nil {
+		t.Fatal("Migrate: want error for an incompatible pre-existing schema_migrations table, got nil")
+	}
+	if !strings.Contains(err.Error(), "reading applied migrations") {
+		t.Errorf("error = %v, want it to mention 'reading applied migrations'", err)
+	}
+}
 
 func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 	sqlDB := dbtest.SetupDB(t)

@@ -1,0 +1,50 @@
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: spamfilter
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Migrations auto-run on startup (cmd/server/main.go); MYSQL_DATABASE
+      # above ensures the "spamfilter" schema already exists.
+      DB_DSN: "root@tcp(mysql:3306)/spamfilter?parseTime=true&multiStatements=true"
+      ADDR: ":8080"
+      # Mock mode for the local stack — no real Apple App Attest verification.
+      ATTEST_MODE: mock
+      # Redis-backed challenge store (Task 11), since redis is present here.
+      CHALLENGE_STORE: redis
+      REDIS_URL: "redis://redis:6379/0"
+    ports:
+      - "8080:8080"
+
+volumes:
+  mysql-data:
