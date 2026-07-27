@@ -9,7 +9,15 @@
 
 SHELL := /usr/bin/env bash
 
-.PHONY: help test-go test-ios test deploy hooks
+.PHONY: help test-go test-ios test build-linux-arm64 deploy deploy-server hooks
+
+# Deploy target host (pm-prod-spamfilter). Override on the command line.
+DEPLOY_HOST ?= 10.30.1.244
+DEPLOY_USER ?= root
+# pm-prod-spamfilter is a t4g.large -- Graviton/arm64, NOT x86_64. Building
+# amd64 here yields "exec format error" on the box.
+GOOS_LINUX  := linux
+GOARCH_ARM  := arm64
 
 ## help: List available targets (default target).
 help:
@@ -17,7 +25,9 @@ help:
 	@echo "  make test-go   Run the Go suite (go test ./... -race -cover)"
 	@echo "  make test-ios  Run the iOS suite (xcodegen + xcodebuild test) on an available simulator"
 	@echo "  make test      Run the full suite: test-go AND test-ios (the pre-deploy gate)"
-	@echo "  make deploy    Run 'test' first (hard prerequisite), then scripts/deploy.sh"
+	@echo "  make build-linux-arm64  Cross-compile server+recompute for the arm64 deploy host"
+	@echo "  make deploy-server      Backend-only release: gated on test-go only"
+	@echo "  make deploy    Full release: gated on 'test' (Go AND iOS), then scripts/deploy.sh"
 	@echo "  make hooks     Install .githooks/pre-push and set core.hooksPath"
 
 ## test-go: Go unit/integration suite with race detector and coverage.
@@ -54,14 +64,28 @@ test-ios:
 test: test-go test-ios
 	@echo "All suites passed (Go + iOS)."
 
-## deploy: 'test' is a hard prerequisite so a red suite aborts here,
-## before scripts/deploy.sh (or any deploy step) ever runs.
-deploy: test
-	@if [ -x scripts/deploy.sh ]; then \
-		./scripts/deploy.sh; \
-	else \
-		echo "scripts/deploy.sh not found or not executable -- skipping deploy step." >&2; \
-	fi
+## build-linux-arm64: Cross-compile the server and recompute binaries for the
+## deploy host. Static (CGO_ENABLED=0) so nothing needs installing on the box,
+## and migrations are go:embed'ed so the binary is fully self-contained.
+build-linux-arm64:
+	@mkdir -p bin
+	CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=$(GOARCH_ARM) go build -trimpath -o bin/hushield-server ./cmd/server
+	CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=$(GOARCH_ARM) go build -trimpath -o bin/hushield-recompute ./cmd/recompute
+	@echo "--- verifying architecture (must say ARM aarch64) ---"
+	@file bin/hushield-server bin/hushield-recompute
+	@file bin/hushield-server | grep -q 'ARM aarch64' \
+		|| { echo "ERROR: bin/hushield-server is not ARM aarch64 -- it will not run on $(DEPLOY_HOST)." >&2; exit 1; }
+
+## deploy-server: Backend-only release. Gated on the Go suite ALONE -- a broken
+## iOS simulator must never block a server hotfix, which is why this exists
+## separately from 'deploy'.
+deploy-server: test-go build-linux-arm64
+	DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_USER=$(DEPLOY_USER) ./scripts/deploy.sh
+
+## deploy: Full release. 'test' (Go AND iOS) is a hard prerequisite so a red
+## suite aborts here before any deploy step runs.
+deploy: test build-linux-arm64
+	DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_USER=$(DEPLOY_USER) ./scripts/deploy.sh
 
 ## hooks: Install the pre-push gate and point git at .githooks.
 hooks:
