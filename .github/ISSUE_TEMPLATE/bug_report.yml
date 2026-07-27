@@ -1,0 +1,91 @@
+name: Bug report
+description: Something in HuShield is broken or behaves unexpectedly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not include real phone numbers, contact data, or anything
+        personally identifying — redact them (e.g. `+1555XXXXXXX`). HuShield holds no PII by design
+        and its issue tracker shouldn't either.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Where does the problem occur?
+      options:
+        - Backend (Go / MySQL API)
+        - iOS app (SwiftUI)
+        - Call Directory extension (call blocking / labeling)
+        - SMS Filter extension (message classification)
+        - SpamFilterKit (shared framework)
+        - Build / tooling (make, xcodegen, migrations)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, or `git rev-parse --short HEAD`.
+      placeholder: v0.1.0 or a0a731b
+    validations:
+      required: true
+
+  - type: dropdown
+    id: attest_mode
+    attributes:
+      label: ATTEST_MODE
+      description: >
+        Which App Attest mode was running? `mock` accepts any attestation and is dev-only; `apple`
+        performs real verification. This changes the meaning of most auth-related bugs.
+      options:
+        - mock
+        - apple
+        - Not applicable (iOS-only issue, or build failure)
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened?
+      description: Include exact error text or log output. Redact any real numbers.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps. A failing test is the ideal reproduction.
+      placeholder: |
+        1. Start the server with DB_DSN=... ADMIN_TOKEN=...
+        2. POST /api/v1/reports with ...
+        3. GET /api/v1/blocklist?since=0
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version, Xcode version, MySQL version — whichever are relevant.
+      placeholder: macOS 26.5, Go 1.26, Xcode 26.6, MySQL 8.4
+
+  - type: checkboxes
+    id: device
+    attributes:
+      label: Physical device
+      options:
+        - label: This requires a physical iPhone to reproduce (App Attest cannot be validated in a simulator)
