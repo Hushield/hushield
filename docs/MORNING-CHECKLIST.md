@@ -8,8 +8,8 @@ a host is chosen.
 Identity/signing values used throughout (from `.planning/STATE.md`):
 
 - Apple Team ID: `997DW79YCR`
-- Bundle ID: `com.brahy.spamfilter`
-- App Attest `APP_ID`: `997DW79YCR.com.brahy.spamfilter`
+- Bundle ID: `com.brahy.hushield`
+- App Attest `APP_ID`: `997DW79YCR.com.brahy.hushield`
 
 ## 0. Start the local backend
 
@@ -37,9 +37,9 @@ Leave this running in its own terminal/tab for the rest of the session.
 3. Select the device as the run destination for the `SpamFilter` scheme.
 4. Confirm Signing & Capabilities resolves automatically (`CODE_SIGN_STYLE: Automatic`,
    `DEVELOPMENT_TEAM: 997DW79YCR`) for all three targets that ship to device:
-   - `SpamFilter` (`com.brahy.spamfilter`)
-   - `CallDirectoryExtension` (`com.brahy.spamfilter.CallDirectory`)
-   - `MessageFilterExtension` (`com.brahy.spamfilter.MessageFilter`)
+   - `SpamFilter` (`com.brahy.hushield`)
+   - `CallDirectoryExtension` (`com.brahy.hushield.CallDirectory`)
+   - `MessageFilterExtension` (`com.brahy.hushield.MessageFilter`)
    Fix any "no signing certificate"/"no matching provisioning profile" errors in Xcode before
    continuing (should auto-resolve with the paid account already on this Team ID).
 
@@ -97,7 +97,7 @@ mode unless `APP_ID`, a non-default `DEVICE_TOKEN_SECRET`, and `ADMIN_TOKEN` are
 
 ```sh
 ATTEST_MODE=apple \
-APP_ID=997DW79YCR.com.brahy.spamfilter \
+APP_ID=997DW79YCR.com.brahy.hushield \
 DEVICE_TOKEN_SECRET=$(openssl rand -hex 32) \
 ADMIN_TOKEN=$(openssl rand -hex 32) \
 DB_DSN='root@tcp(127.0.0.1:3306)/spamfilter_dev?parseTime=true&multiStatements=true' \

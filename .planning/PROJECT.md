@@ -39,4 +39,4 @@ blocklist. Identity is an Apple App Attest key only: **no accounts, no PII.**
 | 2026-07-19 | Weighted time-decay scoring with per-device trust, not a raw blocklist | "Amazing," Hiya-grade quality over a bare list; resists brigading and stale data |
 | 2026-07-21 | Spec 2a: add assertion refresh, tombstones, lookup, and APNs *before* the app | Anti-drift audit found the client would need these backend surfaces; cheaper to add now |
 | 2026-07-23 | Native Swift for the iOS client | Call Directory + SMS Filter are first-class native app extensions; Flutter can't host them |
-| 2026-07-23 | Bundle ID `com.brahy.spamfilter`, Team `997DW79YCR` → App Attest `APP_ID` `997DW79YCR.com.brahy.spamfilter` | Signed the scaffold with John's paid account; this is the exact identity the backend's `apple` attest mode must trust |
+| 2026-07-23 | Bundle ID `com.brahy.hushield`, Team `997DW79YCR` → App Attest `APP_ID` `997DW79YCR.com.brahy.hushield` | Signed the scaffold with John's paid account; this is the exact identity the backend's `apple` attest mode must trust |

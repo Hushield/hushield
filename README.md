@@ -1,10 +1,16 @@
-# SpamFilter
+# HuShield
 
-A community spam-reporting backend, in the spirit of Hiya/Truecaller: iOS devices attested with
-Apple App Attest report phone numbers as spam or not-spam, reports are folded into a decaying
+A community-driven spam call and text filter, in the spirit of Hiya/Truecaller: iOS devices attested
+with Apple App Attest report phone numbers as spam or not-spam, reports are folded into a decaying
 weighted score per number, and any attested device can pull the resulting blocklist. There is no
-user identity beyond a device's App Attest key — no accounts, no PII. The iOS client itself is a
-future Spec 2; this repo is the Go + MySQL backend only.
+user identity beyond a device's App Attest key — **no accounts, no PII.**
+
+This repo holds the whole system: the Go + MySQL backend (`cmd/`, `internal/`) and the native Swift
+iOS client (`ios/`) — the app plus its Call Directory extension for blocking and labeling calls and
+its SMS Filter extension for offline message classification.
+
+HuShield is free, and will stay free. It is licensed Apache-2.0 and built in the open —
+contributions are genuinely wanted. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Architecture
 
