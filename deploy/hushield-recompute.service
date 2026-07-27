@@ -1,0 +1,29 @@
+[Unit]
+Description=HuShield score decay and trust recomputation (one-shot)
+Documentation=https://github.com/Hushield/hushield
+After=network-online.target mysqld.service
+Requires=mysqld.service
+
+[Service]
+# One-shot: cmd/recompute performs a single pass and exits. Scheduling is the
+# timer's job, not this unit's -- see hushield-recompute.timer.
+Type=oneshot
+User=hushield
+Group=hushield
+WorkingDirectory=/opt/hushield
+ExecStart=/opt/hushield/bin/hushield-recompute
+# Shares the API's environment file so the DSN lives in exactly one place.
+EnvironmentFile=/opt/hushield/.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hushield-recompute
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/hushield
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+RestrictSUIDSGID=yes

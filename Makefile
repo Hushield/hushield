@@ -13,7 +13,9 @@ SHELL := /usr/bin/env bash
 
 # Deploy target host (pm-prod-spamfilter). Override on the command line.
 DEPLOY_HOST ?= 10.30.1.244
-DEPLOY_USER ?= root
+# AL2023 disables direct root SSH ("Please login as the user ec2-user"), and
+# that refusal message breaks scp. Connect as ec2-user and sudo on the far side.
+DEPLOY_USER ?= ec2-user
 # pm-prod-spamfilter is a t4g.large -- Graviton/arm64, NOT x86_64. Building
 # amd64 here yields "exec format error" on the box.
 GOOS_LINUX  := linux

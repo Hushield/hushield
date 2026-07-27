@@ -1,0 +1,42 @@
+[Unit]
+Description=HuShield API (community spam-reporting backend)
+Documentation=https://github.com/Hushield/hushield
+# Migrations are go:embed'ed and applied at startup, so the database must be
+# up first. Restart=on-failure will retry if MySQL is still initializing.
+After=network-online.target mysqld.service
+Wants=network-online.target
+Requires=mysqld.service
+
+[Service]
+Type=simple
+User=hushield
+Group=hushield
+WorkingDirectory=/opt/hushield
+ExecStart=/opt/hushield/bin/hushield-server
+EnvironmentFile=/opt/hushield/.env
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hushield-api
+
+# Security hardening. The binary is static and self-contained (CGO_ENABLED=0,
+# migrations embedded), so it needs no write access anywhere except its own
+# home, and no privileges beyond binding a loopback port.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/hushield
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

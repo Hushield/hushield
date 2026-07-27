@@ -1,0 +1,22 @@
+[Unit]
+Description=Run HuShield score decay and trust recomputation every 15 minutes
+Documentation=https://github.com/Hushield/hushield
+
+[Timer]
+# First run shortly after boot, then every 15 minutes.
+OnBootSec=2min
+OnUnitActiveSec=15min
+
+# Persistent means a run missed while the host was down fires once on the next
+# boot rather than being skipped. Scores decay with wall-clock time, so a gap in
+# recomputation leaves stale block/label decisions in the blocklist delta.
+Persistent=true
+
+# Spread the load slightly so recompute never lands exactly on another job.
+RandomizedDelaySec=30
+AccuracySec=1min
+
+Unit=hushield-recompute.service
+
+[Install]
+WantedBy=timers.target
