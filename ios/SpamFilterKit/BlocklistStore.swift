@@ -35,7 +35,7 @@ public final class BlocklistStore {
     ///   nonexistent identifier), so the nil/failure branch can't otherwise
     ///   be exercised without injection.
     public static func makeAppGroupStore(
-        appGroupIdentifier: String = "group.com.brahy.spamfilter",
+        appGroupIdentifier: String = "group.com.brahy.hushield",
         containerResolver: (String) -> URL? = { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) }
     ) throws -> BlocklistStore {
         guard let containerURL = containerResolver(appGroupIdentifier) else {

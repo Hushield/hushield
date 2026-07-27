@@ -12,7 +12,7 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     CODE_SIGN_STYLE: Automatic
-    # John Brahy paid Apple Developer team. APP_ID = 997DW79YCR.com.brahy.spamfilter
+    # John Brahy paid Apple Developer team. APP_ID = 997DW79YCR.com.brahy.hushield
     DEVELOPMENT_TEAM: "997DW79YCR"
 
 targets:
@@ -23,7 +23,7 @@ targets:
       - path: SpamFilterKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter.kit
+        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.hushield.kit
         PRODUCT_NAME: SpamFilterKit
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_ENTITLEMENTS: SpamFilterKit/SpamFilterKit.entitlements
@@ -43,7 +43,7 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter
+        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.hushield
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: SpamFilter/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: SpamFilter
@@ -69,7 +69,7 @@ targets:
         embed: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter.CallDirectory
+        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.hushield.CallDirectory
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: CallDirectoryExtension/Info.plist
         TARGETED_DEVICE_FAMILY: "1"
@@ -85,7 +85,7 @@ targets:
         embed: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.spamfilter.MessageFilter
+        PRODUCT_BUNDLE_IDENTIFIER: com.brahy.hushield.MessageFilter
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: MessageFilterExtension/Info.plist
         TARGETED_DEVICE_FAMILY: "1"

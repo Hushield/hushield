@@ -55,7 +55,7 @@ final class AppEnvironment {
         self.statusReading = StatusReader(tokenStore: tokenStore, store: store, defaults: defaults)
     }
 
-    static let appGroupIdentifier = "group.com.brahy.spamfilter"
+    static let appGroupIdentifier = "group.com.brahy.hushield"
     static let lastSyncedKey = "lastSyncedAt"
 
     /// Base URL strictly from the `SPAMFILTER_API_BASE_URL` Info.plist key

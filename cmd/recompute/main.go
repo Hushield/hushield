@@ -9,7 +9,7 @@
 // Alternatively, pass -interval to have the process itself run continuously,
 // repeating on that schedule until it receives SIGINT/SIGTERM — useful when
 // running under a supervisor (systemd, a container orchestrator) instead of
-// cron/launchd. See scripts/com.brahy.spamfilter.recompute.plist and
+// cron/launchd. See scripts/com.brahy.hushield.recompute.plist and
 // scripts/recompute.cron for ready-to-use scheduler configs.
 package main
 

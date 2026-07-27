@@ -11,7 +11,7 @@ import Foundation
 public final class SyncService {
     /// Bundle identifier of the Call Directory extension target, reloaded
     /// once a sync completes.
-    private static let callDirectoryIdentifier = "com.brahy.spamfilter.CallDirectory"
+    private static let callDirectoryIdentifier = "com.brahy.hushield.CallDirectory"
 
     private let apiClient: APIClient
     private let tokenProvider: () async throws -> String

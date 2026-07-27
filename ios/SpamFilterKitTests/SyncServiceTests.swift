@@ -3,7 +3,7 @@ import XCTest
 
 final class SyncServiceTests: XCTestCase {
     private let baseURL = URL(string: "https://api.example.test")!
-    private let callDirectoryIdentifier = "com.brahy.spamfilter.CallDirectory"
+    private let callDirectoryIdentifier = "com.brahy.hushield.CallDirectory"
     private var tempDirectory: URL!
 
     override func setUp() {

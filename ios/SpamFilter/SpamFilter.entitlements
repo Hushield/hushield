@@ -4,7 +4,7 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.brahy.spamfilter</string>
+		<string>group.com.brahy.hushield</string>
 	</array>
 	<key>com.apple.developer.devicecheck.appattest-environment</key>
 	<string>development</string>

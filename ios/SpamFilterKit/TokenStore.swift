@@ -20,7 +20,7 @@ public final class KeychainTokenStore: TokenStore {
     private static let tokenAccount = "device_token"
     private static let keyIDAccount = "attest_key_id"
 
-    public init(service: String = "com.brahy.spamfilter") {
+    public init(service: String = "com.brahy.hushield") {
         self.service = service
     }
 
