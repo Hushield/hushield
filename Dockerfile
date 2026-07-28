@@ -13,7 +13,8 @@ COPY cmd ./cmd
 COPY internal ./internal
 
 # CGO disabled -> static binary that runs on a minimal/distroless base.
-RUN CGO_ENABLED=0 GOOS=linux go build -o /server ./cmd/server
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /server ./cmd/server
 
 # --- Runtime ------------------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
