@@ -4,8 +4,12 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<!-- The name shown on the home screen and in Settings. This target sets
+	     GENERATE_INFOPLIST_FILE=NO and supplies this file explicitly, which
+	     means INFOPLIST_KEY_CFBundleDisplayName build settings are IGNORED --
+	     the value has to live here. -->
 	<key>CFBundleDisplayName</key>
-	<string>SpamFilter</string>
+	<string>HuShield</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
