@@ -180,7 +180,7 @@ else
 	warn "Skipped (no working API access)."
 fi
 
-head1 "4. App Store Connect app record  ${bold}[MANUAL — cannot be scripted]${rst}"
+head1 "4. App Store Connect app record  ${bold}[MANUAL — needed only for upload]${rst}"
 
 APP_RECORD_OK=0
 if [ "${ASC_AVAILABLE:-0}" = "1" ]; then
@@ -194,14 +194,16 @@ if [ "${ASC_AVAILABLE:-0}" = "1" ]; then
 		fi
 	fi
 	if [ "$APP_RECORD_OK" = "0" ]; then
-		problem "No App Store Connect app record for $APP_BUNDLE_ID.
-      POST /v1/apps returns 403 'does not allow CREATE', so this must be done by hand:
-        https://appstoreconnect.apple.com/apps  ▸  +  ▸  New App
-        Platform: iOS
-        Name:     $APP_NAME        (must be globally unique on the App Store)
-        Language: English (U.S.)
-        Bundle ID: $APP_BUNDLE_ID
-        SKU:      HUSHIELD-IOS-001"
+		# Deliberately a warning, not a blocker. The app record is required to
+		# UPLOAD, not to archive -- so the build can proceed and prove the
+		# signing, App Group, and App Attest setup while this is still missing.
+		# The upload step refuses to run without it.
+		warn "No App Store Connect app record for $APP_BUNDLE_ID yet."
+		warn "Not a blocker for archiving -- only for the upload at the end."
+		warn "POST /v1/apps returns 403 'does not allow CREATE', so create it by hand:"
+		warn "  https://appstoreconnect.apple.com/apps  ▸  +  ▸  New App"
+		warn "  Platform: iOS · Name: $APP_NAME · Language: English (U.S.)"
+		warn "  Bundle ID: $APP_BUNDLE_ID · SKU: HUSHIELD-IOS-001"
 	fi
 else
 	warn "Skipped (no working API access)."
