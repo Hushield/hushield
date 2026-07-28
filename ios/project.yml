@@ -46,13 +46,24 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.brahy.hushield
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: SpamFilter/Info.plist
-        INFOPLIST_KEY_CFBundleDisplayName: SpamFilter
+        INFOPLIST_KEY_CFBundleDisplayName: HuShield
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        CODE_SIGN_ENTITLEMENTS: SpamFilter/SpamFilter.entitlements
-        SPAMFILTER_API_BASE_URL: http://localhost:8080
+      configs:
+        # Debug talks to a local server and uses the App Attest DEVELOPMENT
+        # environment. Release talks to production and must use the PRODUCTION
+        # App Attest environment -- TestFlight and App Store builds attest
+        # against production regardless of intent, so a `development`
+        # entitlement in a distributed build yields attestations the server
+        # rejects with no hint that the environment is the cause.
+        debug:
+          CODE_SIGN_ENTITLEMENTS: SpamFilter/SpamFilter.entitlements
+          SPAMFILTER_API_BASE_URL: http://localhost:8080
+        release:
+          CODE_SIGN_ENTITLEMENTS: SpamFilter/SpamFilter.Release.entitlements
+          SPAMFILTER_API_BASE_URL: https://api.hushield.com
     scheme:
       testTargets:
         - SpamFilterKitTests
