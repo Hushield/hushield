@@ -10,6 +10,81 @@ Identity/signing values used throughout (from `.planning/STATE.md`):
 - Apple Team ID: `997DW79YCR`
 - Bundle ID: `com.brahy.hushield`
 - App Attest `APP_ID`: `997DW79YCR.com.brahy.hushield`
+- Backend: **live at `https://api.hushield.com`** in `ATTEST_MODE=apple`
+
+---
+
+## Step A — Four web-UI actions that block the TestFlight archive
+
+**Do these first.** The distribution archive currently fails, and these are the reason. None can be
+scripted: the App Store Connect API either does not expose the resource, or forbids creating it.
+
+Already done via the API, so skip these: bundle IDs `com.brahy.hushield` (`PBA3MXGGU7`),
+`com.brahy.hushield.CallDirectory` (`ZHW6JNSNP8`), `com.brahy.hushield.MessageFilter`
+(`W27J8UFYYJ`), plus the App Groups and Push Notifications capabilities.
+
+### A1. Create the App Group — [Developer Portal ▸ Identifiers ▸ App Groups](https://developer.apple.com/account/resources/identifiers/list/applicationGroup)
+
+Create `group.com.brahy.hushield`, description "HuShield Shared Group".
+
+There is no public API for App Groups (`/v1/appGroups` returns 404). Without this the profile cannot
+carry the entitlement, and all three targets fail with *"doesn't support the group.com.brahy.hushield
+App Group"*.
+
+### A2. Enable App Attest on the app identifier — [Developer Portal ▸ Identifiers](https://developer.apple.com/account/resources/identifiers/list)
+
+Open `com.brahy.hushield` and tick **App Attest**. While there, confirm **App Groups** is ticked and
+associated with `group.com.brahy.hushield`.
+
+App Attest is *not* in the API's `capabilityType` enum — the valid values are ICLOUD,
+IN_APP_PURCHASE, GAME_CENTER, PUSH_NOTIFICATIONS, WALLET, APP_GROUPS, and ~20 others, none of which
+is App Attest. The archive fails with *"Provisioning profile doesn't include the App Attest
+capability"* until this is ticked by hand.
+
+### A3. Associate the App Group with both extensions — same screen
+
+Open `com.brahy.hushield.CallDirectory` and `com.brahy.hushield.MessageFilter` and associate each
+with `group.com.brahy.hushield`. Both extensions read the synced blocklist through the shared
+container, so both need it.
+
+### A4. Create the app record — [App Store Connect ▸ Apps ▸ +](https://appstoreconnect.apple.com/apps)
+
+- Platform: iOS · Name: **HuShield** · Primary language: English (U.S.)
+- Bundle ID: `com.brahy.hushield` · SKU: `HUSHIELD-IOS-001`
+
+The API refuses this outright: `POST /v1/apps` returns
+`403 The resource 'apps' does not allow 'CREATE'`. Note the App Store name must be globally unique —
+if "HuShield" is taken, pick a variant and tell me so I can align the site and docs.
+
+### Then the archive should build
+
+```sh
+cd ios && xcodegen generate
+xcodebuild archive \
+  -project SpamFilter.xcodeproj -scheme SpamFilter -configuration Release \
+  -destination 'generic/platform=iOS' -archivePath build/HuShield.xcarchive \
+  -allowProvisioningUpdates
+```
+
+Run it from Xcode (Product ▸ Archive) if the CLI still reports *"Authentication failed: Make sure a
+bearer token was provided"* — that is xcodebuild failing to use the ASC key for provisioning, and the
+GUI path uses your signed-in account instead.
+
+Upload with Xcode ▸ Organizer ▸ Distribute App ▸ TestFlight, or:
+
+```sh
+xcodebuild -exportArchive -archivePath build/HuShield.xcarchive \
+  -exportPath build/export -exportOptionsPlist ExportOptions.plist
+xcrun altool --upload-app -f build/export/HuShield.ipa -t ios \
+  --apiKey SB44FX6YK4 --apiIssuer 69a6de7d-f074-47e3-e053-5b8c7c11a4d1
+```
+
+Export compliance: the app uses only standard HTTPS/TLS, no custom or proprietary cryptography.
+
+**Internal TestFlight testing needs no App Review**, so the build is installable within minutes of
+processing. External testing would add a review cycle.
+
+---
 
 ## 0. Start the local backend
 
