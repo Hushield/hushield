@@ -50,7 +50,15 @@ Repo health at sync time (2026-07-24): `go build ./...` clean.
 ### Blockers/Concerns
 
 - ~~Phase 3 needs Team ID + bundle ID before it can start~~ — **resolved 2026-07-23** (Team `997DW79YCR`, bundle `com.brahy.hushield`). Optional APNs `.p8` still outstanding for the push path.
-- **Remaining device-gated item:** real `ATTEST_MODE=apple` App Attest verification has only been tested against an injected test root/CA — it needs a genuine physical-iPhone attestation to validate end-to-end. See `docs/MORNING-CHECKLIST.md` for the exact steps.
+- ~~**Remaining device-gated item:** real `ATTEST_MODE=apple` App Attest verification has only been tested against an injected test root/CA~~ — **RESOLVED 2026-07-28 18:08 PDT.** A genuine physical-iPhone attestation was verified end-to-end against `https://api.hushield.com` running `ATTEST_MODE=apple` with `APP_ID=997DW79YCR.com.brahy.hushield`, delivered via TestFlight build 1 (0.1.0).
+
+  Evidence: `POST /api/v1/attest/challenge` 200 → `POST /api/v1/attest/verify` 200 → `GET /api/v1/blocklist` 200, from user-agent `SpamFilter/1 CFNetwork/3860.600.12 Darwin/25.5.0`. The stored `devices` row carries a 44-char base64 key id, a 91-byte DER `SubjectPublicKeyInfo` P-256 public key (`3059301306072A8648CE3D02…`), and a **3,975-byte Apple-issued attestation receipt** — a mock attestation produces no receipt. Negative control: a fabricated attestation posted to the same endpoint returns 401.
+
+  What made it work: `SpamFilter.Release.entitlements` declares `appattest-environment = production`. TestFlight builds attest against Apple's production service, so the original `development` value would have produced attestations the server rejects, with nothing in the error naming the environment.
+
+  **Still device-gated:** enabling the two extensions under iOS Settings, confirming a real call is blocked, and confirming SMS filtering classifies in airplane mode.
+
+- **Note on enrollment timing:** nothing enrolls on app launch. `EnrollmentService.validToken()` is called lazily by sync, lookup, and report only — `StatusScreen.onAppear` merely reads local state. A first-run user sees "Not enrolled yet" with no obvious action; tapping **Sync now** is what triggers attestation. Worth considering as a UX issue.
 - **Remaining deploy-gated items:** no production host chosen yet (`scripts/deploy.sh` no-ops without `DEPLOY_TARGET`); the Dockerfile has never actually been built (no Docker daemon in the environment that authored it) — treat the image build as unverified until run once for real.
 - **Carried, now largely addressed:** `MemoryChallengeStore` is still the *default* (dev/single-instance), but a Redis-backed alternative now exists and is config-selectable for multi-instance deploys; `cmd/recompute` now supports a continuous `-interval` mode (plus `launchd`/`cron` artifacts) in addition to the original one-shot invocation — actually scheduling it on a host is still a deploy-time step.
 
