@@ -1,4 +1,5 @@
 import SwiftUI
+import SpamFilterKit
 
 // MARK: - Card container
 
@@ -84,7 +85,7 @@ struct StatusBadge: View {
 struct NumberField: View {
     let title: String
     @Binding var text: String
-    var placeholder: String = "+14155551234"
+    var placeholder: String = "(415) 555-1234"
     var identifier: String = ""
 
     var body: some View {
@@ -100,6 +101,14 @@ struct NumberField: View {
                     .textContentType(.telephoneNumber)
                     .autocorrectionDisabled()
                     .accessibilityIdentifier(identifier)
+                    // Format as the user types so they never have to know the
+                    // API wants E.164. PhoneFormatter.formatAsTyped is
+                    // idempotent, which is what makes it safe to run against
+                    // its own output on every keystroke.
+                    .onChange(of: text) { _, newValue in
+                        let formatted = PhoneFormatter.formatAsTyped(newValue)
+                        if formatted != text { text = formatted }
+                    }
             }
             .padding(Theme.Spacing.md - 2)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))

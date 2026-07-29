@@ -60,9 +60,13 @@ final class SpamFilterUITests: XCTestCase {
         numberField.tap()
         numberField.typeText("+14155551234")
 
-        // Pick a non-default vote/category to exercise the pickers too.
-        app.segmentedControls.buttons["Not spam"].tap()
+        // Category applies to spam reports only, so exercise it BEFORE switching
+        // the vote: picking "Not spam" intentionally hides the category picker,
+        // because the server discards category for a counter-report.
         app.buttons["Robocall"].tap()
+        app.segmentedControls.buttons["Not spam"].tap()
+        XCTAssertFalse(app.buttons["Robocall"].exists,
+                       "category picker must be hidden for a not_spam vote")
 
         element("report.submit").tap()
 

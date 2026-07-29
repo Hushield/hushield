@@ -19,7 +19,14 @@ struct ReportScreen: View {
                         .onChange(of: model.number) { model.validationMessage = nil }
 
                     votePicker
-                    categoryPicker
+
+                    // Category only weights SPAM reports (scoring.categoryMultipliers).
+                    // A not_spam vote subtracts a flat CounterMultiplier of 1.0, so any
+                    // category picked here would be collected and silently discarded --
+                    // the server does not even record it as top_category.
+                    if model.vote == .spam {
+                        categoryPicker
+                    }
 
                     LabeledTextField(title: "Caller name (optional)", text: $model.callerName, placeholder: "e.g. \u{201C}IRS Refund\u{201D}")
 

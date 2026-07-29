@@ -30,9 +30,9 @@ final class LookupViewModel {
 
     func lookup() async {
         validationMessage = nil
-        let trimmed = number.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard PhoneNumber.e164ToInt64(trimmed) != nil else {
-            validationMessage = "Enter a valid number in E.164 format, e.g. +14155551234."
+        // The field holds display-formatted text, so normalize to E.164 first.
+        guard let trimmed = PhoneFormatter.normalize(number) else {
+            validationMessage = "Enter a valid phone number, e.g. (415) 555-1234."
             phase = .idle
             return
         }
