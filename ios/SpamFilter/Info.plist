@@ -12,6 +12,13 @@
 	<string>HuShield</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<!-- Required by the App Store for any app built against the iOS 11+ SDK:
+	     the icon must live in an asset catalog AND be named here. Because this
+	     target sets GENERATE_INFOPLIST_FILE=NO, Xcode does not inject this key
+	     automatically from ASSETCATALOG_COMPILER_APPICON_NAME -- omitting it
+	     fails upload with error 90713. -->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>

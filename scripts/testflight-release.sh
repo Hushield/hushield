@@ -240,6 +240,54 @@ else
 	problem "SpamFilter.xcodeproj missing and xcodegen did not run."
 fi
 
+head1 "6. App Store validation rules (checked here to avoid a slow upload failure)"
+
+# altool rejects these server-side after the archive AND the upload have already
+# run, which is a long round trip for a missing plist key. Check them up front.
+
+APP_PLIST="$IOS_DIR/SpamFilter/Info.plist"
+ICONSET="$IOS_DIR/SpamFilter/Assets.xcassets/AppIcon.appiconset"
+
+if grep -q "CFBundleIconName" "$APP_PLIST" 2>/dev/null; then
+	ok "CFBundleIconName present (upload error 90713)"
+else
+	problem "CFBundleIconName missing from SpamFilter/Info.plist.
+      Required for any app built against the iOS 11+ SDK. Because this target
+      sets GENERATE_INFOPLIST_FILE=NO, Xcode will NOT inject it automatically.
+      Add:  <key>CFBundleIconName</key><string>AppIcon</string>"
+fi
+
+ICON_PNG="$(find "$ICONSET" -name '*.png' 2>/dev/null | head -1)"
+if [ -z "$ICON_PNG" ]; then
+	problem "No PNG in $ICONSET — the catalog declares an icon but ships none.
+      Upload fails with error 90022 (missing 120x120 icon), because every size
+      is derived from the 1024x1024 source."
+else
+	dims="$(sips -g pixelWidth -g pixelHeight "$ICON_PNG" 2>/dev/null | awk '/pixel/{print $2}' | paste -sd x -)"
+	alpha="$(sips -g hasAlpha "$ICON_PNG" 2>/dev/null | awk '/hasAlpha/{print $2}')"
+	if [ "$dims" = "1024x1024" ] && [ "$alpha" = "no" ]; then
+		ok "App icon $(basename "$ICON_PNG") is 1024x1024 with no alpha"
+	else
+		problem "App icon must be exactly 1024x1024 with NO alpha channel.
+      $(basename "$ICON_PNG") is ${dims:-unknown}, hasAlpha=${alpha:-unknown}.
+      The App Store rejects icons with transparency."
+	fi
+	if ! grep -q '"filename"' "$ICONSET/Contents.json" 2>/dev/null; then
+		problem "$ICONSET/Contents.json has no \"filename\" entry, so the PNG is
+      present but not referenced. Xcode will build an empty icon set."
+	fi
+fi
+
+for ext in CallDirectoryExtension MessageFilterExtension; do
+	if grep -q "CFBundleDisplayName" "$IOS_DIR/$ext/Info.plist" 2>/dev/null; then
+		ok "$ext has CFBundleDisplayName (upload error 90360)"
+	else
+		problem "CFBundleDisplayName missing from $ext/Info.plist.
+      Required for app extensions; upload fails with error 90360. This is also
+      the label shown next to the toggle in iOS Settings."
+	fi
+done
+
 # ----------------------------------------------------------------- gate / report
 
 if [ ${#PROBLEMS[@]} -gt 0 ]; then
@@ -267,7 +315,7 @@ fi
 
 # ---------------------------------------------------------------------- archive
 
-head1 "6. Archiving for distribution"
+head1 "7. Archiving for distribution"
 
 mkdir -p "$BUILD_DIR"
 rm -rf "$ARCHIVE"
@@ -341,7 +389,7 @@ ok "Archive created: $ARCHIVE"
 
 # ----------------------------------------------------------------------- export
 
-head1 "7. Exporting the IPA"
+head1 "8. Exporting the IPA"
 
 PLIST="$BUILD_DIR/ExportOptions.plist"
 cat > "$PLIST" <<EOF
@@ -396,7 +444,7 @@ fi
 
 # ----------------------------------------------------------------------- upload
 
-head1 "8. Uploading to App Store Connect"
+head1 "9. Uploading to App Store Connect"
 
 if [ "$APP_RECORD_OK" != "1" ]; then
 	die "Refusing to upload: no app record exists for $APP_BUNDLE_ID. Create it first (step 4)."

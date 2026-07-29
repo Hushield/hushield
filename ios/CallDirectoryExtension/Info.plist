@@ -4,6 +4,10 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<!-- Required for app extensions; upload fails with error 90360 without it.
+	     This is the label shown beside the toggle in iOS Settings. -->
+	<key>CFBundleDisplayName</key>
+	<string>HuShield</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
