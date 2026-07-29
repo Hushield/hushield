@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go build, vet, fmt, vulncheck, test
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          # Matches the passwordless root@tcp(127.0.0.1:3306) DSN that
+          # DB_DSN defaults to in .env.example -- no secret needed for CI.
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: spamfilter_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    # DB_DSN mirrors the format documented in .env.example / README, just
+    # pointed at the service container and its pre-created database.
+    # parseTime + multiStatements are required by the migration runner that
+    # internal/db applies automatically on first connect.
+    env:
+      DB_DSN: "root@tcp(127.0.0.1:3306)/spamfilter_test?parseTime=true&multiStatements=true"
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Read the version straight from go.mod so CI always tracks the
+          # pinned toolchain instead of drifting from whatever "stable" is.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            mysqladmin ping -h 127.0.0.1 -P 3306 -u root --silent && break
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+
+      - name: gofmt check
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$fmt_out"
+            echo
+            echo "Run 'gofmt -w .' locally and commit the result."
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: go test (race + cover)
+        run: go test ./... -race -cover
+        # Coverage output above is informational only for now -- no hard
+        # threshold is enforced. A young project mostly gets noise from a
+        # strict gate here; revisit once coverage stabilizes.
