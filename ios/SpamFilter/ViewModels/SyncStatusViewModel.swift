@@ -40,9 +40,19 @@ final class SyncStatusViewModel {
 
     func syncNow() async {
         phase = .syncing
+
+        // Refresh on BOTH paths. A sync is not all-or-nothing: SyncService
+        // enrolls, fetches the blocklist, and saves it before asking CallKit to
+        // reload the Call Directory. That reload fails with
+        // `calldirectorymanager error 6` (extensionDisabled) until the user
+        // switches the extension on in Settings -- so on first run the sync
+        // reliably throws *after* enrollment and the blocklist have committed.
+        // Refreshing only on success made the Status screen report "Not enrolled
+        // yet" to a device that was already enrolled.
+        defer { refresh() }
+
         do {
             try await syncer.sync()
-            refresh()
             phase = .idle
         } catch {
             phase = .failed(message: ServiceErrorText.message(for: error))
