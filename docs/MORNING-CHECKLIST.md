@@ -85,8 +85,12 @@ Upload with Xcode ▸ Organizer ▸ Distribute App ▸ TestFlight, or:
 ```sh
 xcodebuild -exportArchive -archivePath build/HuShield.xcarchive \
   -exportPath build/export -exportOptionsPlist ExportOptions.plist
+# ASC_KEY_ID and ASC_ISSUER_ID are kept out of this repo on purpose -- it is
+# public, and they are two of the three parts of ASC API auth. Source them from
+# a gitignored file, e.g. ~/.config/hushield/asc.env
+source ~/.config/hushield/asc.env
 xcrun altool --upload-app -f build/export/HuShield.ipa -t ios \
-  --apiKey SB44FX6YK4 --apiIssuer 69a6de7d-f074-47e3-e053-5b8c7c11a4d1
+  --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 ```
 
 Export compliance: the app uses only standard HTTPS/TLS, no custom or proprietary cryptography.

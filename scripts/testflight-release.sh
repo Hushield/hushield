@@ -22,9 +22,22 @@
 #   ./scripts/testflight-release.sh --no-upload  # build and export, skip the upload
 #
 # Environment overrides:
-#   ASC_KEY_PATH   path to the App Store Connect .p8 (auto-discovered otherwise)
-#   ASC_KEY_ID     App Store Connect key id      (default SB44FX6YK4)
-#   ASC_ISSUER_ID  App Store Connect issuer id   (default 69a6de7d-...)
+# Required environment (App Store Connect API credentials):
+#   ASC_KEY_ID     App Store Connect key id
+#   ASC_ISSUER_ID  App Store Connect issuer id
+#   ASC_KEY_PATH   path to the .p8 (optional; auto-discovered from the usual
+#                  locations using ASC_KEY_ID)
+#
+# These are deliberately NOT defaulted in this file. They are two of the three
+# components of ASC API authentication, and this repository is public -- the
+# third component (the .p8 private key) is all that would be missing. Keep them
+# in a gitignored local file and source it, e.g.:
+#
+#   # ~/.config/hushield/asc.env   (chmod 600, outside the repo)
+#   export ASC_KEY_ID=XXXXXXXXXX
+#   export ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+#
+#   source ~/.config/hushield/asc.env && ./scripts/testflight-release.sh
 
 set -euo pipefail
 
@@ -37,8 +50,8 @@ APP_GROUP="group.com.brahy.hushield"
 APP_NAME="HuShield"
 EXPECTED_API_BASE="https://api.hushield.com"
 
-ASC_KEY_ID="${ASC_KEY_ID:-SB44FX6YK4}"
-ASC_ISSUER_ID="${ASC_ISSUER_ID:-69a6de7d-f074-47e3-e053-5b8c7c11a4d1}"
+ASC_KEY_ID="${ASC_KEY_ID:-}"
+ASC_ISSUER_ID="${ASC_ISSUER_ID:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IOS_DIR="$REPO_ROOT/ios"
@@ -62,6 +75,25 @@ bad()  { printf "  ${red}✗${rst} %s\n" "$*"; }
 warn() { printf "  ${ylw}!${rst} %s\n" "$*"; }
 head1() { printf "\n${bold}%s${rst}\n" "$*"; }
 die()  { printf "\n${red}%s${rst}\n" "$*" >&2; exit 1; }
+
+# Fail early and usefully rather than surfacing a confusing auth error later.
+# These are intentionally not stored in the repo: it is public, and they are two
+# of the three parts of App Store Connect API authentication.
+if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ]; then
+	die "ASC_KEY_ID and ASC_ISSUER_ID must be set.
+
+They are deliberately not committed -- this repository is public, and these are
+two of the three components of App Store Connect API auth. Keep them in a
+gitignored file outside the repo and source it:
+
+  # ~/.config/hushield/asc.env   (chmod 600)
+  export ASC_KEY_ID=XXXXXXXXXX
+  export ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+  source ~/.config/hushield/asc.env && ./scripts/testflight-release.sh
+
+Both are at https://appstoreconnect.apple.com/access/integrations/api"
+fi
 
 PROBLEMS=()
 problem() { PROBLEMS+=("$1"); bad "$1"; }
