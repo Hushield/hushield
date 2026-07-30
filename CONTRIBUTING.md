@@ -137,6 +137,7 @@ worth more than any individual preference.
 | `bug` | Something is broken. |
 | `area:backend` | Go / MySQL side. |
 | `area:ios` | Swift app or extensions. |
+| `area:ops` | Deploy, CI, infrastructure, scheduling. |
 | `needs-device` | Requires a physical iPhone (App Attest cannot be validated in a simulator). |
 
 If you want to work on an issue, comment on it. No formal assignment process — just say so, so two
