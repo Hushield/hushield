@@ -1,15 +1,33 @@
+# LOCAL DEVELOPMENT ONLY. Do not deploy this.
+#
+# Production runs the binary under systemd behind nginx -- see deploy/ and
+# scripts/deploy.sh. This file exists so a contributor can get a working stack
+# (MySQL + Redis + server) with one command and no local installs.
+#
+# Two deliberate choices that make it dev-only:
+#
+#   * MySQL uses a throwaway password. It is not a secret and is not meant to be.
+#   * ATTEST_MODE=mock accepts ANY attestation. That is correct for development
+#     and catastrophic anywhere reachable.
+#
+# Database and Redis ports are bound to 127.0.0.1 rather than 0.0.0.0 so that
+# running this on a machine with a public interface does not expose MySQL to the
+# internet. The previous version published "3306:3306" with an empty root
+# password, which on any cloud host is a full database compromise.
+
 services:
   mysql:
     image: mysql:8
     environment:
-      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      # Throwaway local credential; see the header. Not a secret.
+      MYSQL_ROOT_PASSWORD: devonly
       MYSQL_DATABASE: spamfilter
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pdevonly"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -17,7 +35,7 @@ services:
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -34,17 +52,19 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Migrations auto-run on startup (cmd/server/main.go); MYSQL_DATABASE
-      # above ensures the "spamfilter" schema already exists.
-      DB_DSN: "root@tcp(mysql:3306)/spamfilter?parseTime=true&multiStatements=true"
+      # Migrations are go:embed'ed and auto-run on startup (cmd/server/main.go);
+      # MYSQL_DATABASE above ensures the schema exists first.
+      DB_DSN: "root:devonly@tcp(mysql:3306)/spamfilter?parseTime=true&multiStatements=true"
       ADDR: ":8080"
-      # Mock mode for the local stack — no real Apple App Attest verification.
+      # Mock mode: NO real Apple App Attest verification. Dev only.
       ATTEST_MODE: mock
-      # Redis-backed challenge store (Task 11), since redis is present here.
+      # Exercises the Redis-backed challenge store, since redis is present here.
       CHALLENGE_STORE: redis
       REDIS_URL: "redis://redis:6379/0"
+      # Needed for the admin override routes; empty would disable them (503).
+      ADMIN_TOKEN: devonly-admin-token
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
 volumes:
   mysql-data:
