@@ -42,13 +42,19 @@ func TestBaseDSN_FallsBackToDefault(t *testing.T) {
 	}
 }
 
-// A DSN naming a database is fine: SetupDB overrides DBName with its own
-// per-call database, so the name in the DSN is irrelevant. This is why accepting
-// DB_DSN is safe rather than merely convenient.
-func TestSetupDB_AcceptsADSNThatNamesADatabase(t *testing.T) {
+// A DSN that names an EXISTING database is fine: SetupDB still creates and
+// connects to its own per-call database, overriding DBName for the returned pool.
+// That is what makes accepting DB_DSN safe -- PR #12's DB_DSN names
+// spamfilter_test, which its service container creates.
+//
+// Note the limit, which an earlier version of this test got wrong: the database
+// in the DSN must EXIST, because SetupDB opens its admin connection with the DSN
+// as given and Pings it. A DSN naming a non-existent database fails at that Ping
+// with "Unknown database", not at the CREATE.
+func TestSetupDB_OverridesTheDatabaseNamedInTheDSN(t *testing.T) {
 	t.Setenv("TEST_DB_DSN", "")
-	// Deliberately names a database that does not exist.
-	t.Setenv("DB_DSN", "root@tcp(127.0.0.1:3306)/definitely_not_a_real_db?parseTime=true&multiStatements=true")
+	// "mysql" always exists, standing in for PR #12's pre-created spamfilter_test.
+	t.Setenv("DB_DSN", "root@tcp(127.0.0.1:3306)/mysql?parseTime=true&multiStatements=true")
 
 	sqlDB := SetupDB(t)
 
@@ -59,7 +65,7 @@ func TestSetupDB_AcceptsADSNThatNamesADatabase(t *testing.T) {
 	if !strings.HasPrefix(name, "spamfilter_test_") {
 		t.Errorf("connected to %q, want SetupDB's own spamfilter_test_* database", name)
 	}
-	if name == "definitely_not_a_real_db" {
+	if name == "mysql" {
 		t.Error("SetupDB used the database from the DSN instead of creating its own")
 	}
 }

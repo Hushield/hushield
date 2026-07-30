@@ -22,6 +22,11 @@ func TestSetupDB_HonorsTestDBDSNOverride(t *testing.T) {
 // reached -- the safety valve that lets the whole suite run somewhere MySQL
 // isn't available instead of failing every DB-backed test outright.
 func TestSetupDB_SkipsWhenServerUnreachable(t *testing.T) {
+	// This asserts the LOCAL behaviour. SetupDB now FAILS instead of skipping
+	// when CI is set (so a dead service container cannot yield a green run), so
+	// CI has to be cleared here or this test fails on every CI run -- which is
+	// exactly what happened the first time the workflow ran.
+	t.Setenv("CI", "")
 	t.Setenv("TEST_DB_DSN", "root@tcp(127.0.0.1:1)/?parseTime=true&timeout=1s")
 
 	var ran bool
