@@ -83,4 +83,17 @@ else
 	die "/healthz did not return success. Check: journalctl -u hushield-api -n 50"
 fi
 
+# A 200 from /healthz only proves the process is up. Run the production smoke
+# suite so a deploy that boots but has, say, silently fallen back to mock mode
+# fails here rather than in the wild.
+if [ -x scripts/smoke-prod.sh ] && [ "${SKIP_SMOKE:-0}" != "1" ]; then
+	echo "==> Production smoke checks"
+	if BASE="${SMOKE_BASE:-https://api.hushield.com}" ./scripts/smoke-prod.sh; then
+		echo "    smoke passed"
+	else
+		die "production smoke checks FAILED after deploy. The service is running but
+       misbehaving -- see the output above. Set SKIP_SMOKE=1 to bypass."
+	fi
+fi
+
 echo "==> Deploy complete"
