@@ -180,9 +180,9 @@ func TestIsValidBlocklistPrefix(t *testing.T) {
 	}{
 		{"415555", true},
 		{"000000", true},
-		{"41555", false},  // too short
+		{"41555", false},   // too short
 		{"4155555", false}, // too long
-		{"41555a", false}, // non-digit
+		{"41555a", false},  // non-digit
 		{"", false},
 	}
 	for _, tc := range cases {
