@@ -12,6 +12,23 @@ its SMS Filter extension for offline message classification.
 HuShield is free, and will stay free. It is licensed Apache-2.0 and built in the open —
 contributions are genuinely wanted. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
+## Live
+
+| | |
+|---|---|
+| Site | **https://hushield.com** |
+| API | **https://api.hushield.com** (`ATTEST_MODE=apple`) |
+| iOS | TestFlight, internal testing |
+| Contribute | [good first issues](https://github.com/Hushield/hushield/labels/good-first-issue) |
+
+**Verified on real hardware:** Apple App Attest end-to-end (confirmed by the Apple-issued
+attestation receipt; fabricated attestations are rejected 401), report submission, blocklist
+delta sync, the CallKit reload, admin overrides, and `action:"unblock"` tombstones.
+
+**Not yet verified,** and not claimed as working: an actual incoming call being blocked, and SMS
+classification with the device offline. Both need a second phone line to call from. APNs silent
+push is a documented no-op until an auth key is supplied.
+
 ## Architecture
 
 ```
