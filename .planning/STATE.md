@@ -2,31 +2,47 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-23)
+See: .planning/PROJECT.md (updated 2026-07-30)
 
 **Core value:** Community-driven, privacy-first (App Attest, no PII) spam call/text filtering for iOS.
-**Current focus:** Phase 3 (iOS app) + Phase 4 (production hardening) — both substantially complete;
-remaining work is device-gated (physical iPhone session) and deploy-gated (choose a host).
+**Current focus:** Everything is deployed and live. Remaining work is two on-device
+observations that need a second phone line to call from.
 
 ## Current Position
 
-Phase: 3 and 4 of 4 — substantially complete, pending a device session and a deploy target
-Plan: Tasks 1–9 + 11 implemented and merged; Task 10 (this update) is planning-doc wrap-up
-Status: Code-complete for everything that doesn't require a physical device or a chosen deploy
-  host. What's left is a ~20–30 min guided device session (see `docs/MORNING-CHECKLIST.md`) plus
-  picking a production host.
-Last activity: 2026-07-24 — Phase 3 iOS app (SpamFilterKit, extensions, SwiftUI app, full test
-  suite) and Phase 4 backend hardening (Redis challenge store, scheduled recompute, prod config
-  validation, container deploy scaffold, `make`-based test gate) merged to `spam-ios-phase3`.
+Phase: **All four phases deployed and live.** Remaining work is two on-device
+  observations that need a second phone line, plus optional hardening.
+Status: Backend live at **https://api.hushield.com** (`ATTEST_MODE=apple`, MySQL 8.4,
+  nginx + Let's Encrypt, systemd, recompute on a 15-min timer). Marketing site live at
+  **https://hushield.com**. Code public at **github.com/Hushield/hushield** (Apache-2.0,
+  10 open issues, v0.1.0). iOS build 2 on TestFlight, `IN_BETA_TESTING`.
+Last activity: 2026-07-30 — verified the report → score → blocklist → tombstone state
+  machine against production; promoted REQ-10/11/12; shipped build 2 with three fixes
+  found during device testing.
 
-**iOS signing (resolved 2026-07-23):**
-- Apple Team ID: `997DW79YCR` (John Brahy, paid account)
-- Bundle ID: `com.brahy.hushield`
-- **App Attest `APP_ID`: `997DW79YCR.com.brahy.hushield`** — the exact value the backend needs for `ATTEST_MODE=apple`.
+Progress: [██████████] ~97%
 
-Progress: [████████░░] ~90% (Phases 1–2 complete; Phases 3–4 substantially complete — remaining
-  ~10% is the device-gated App Attest validation, the two Settings toggles, and choosing +
-  verifying a deploy host)
+**Verified against production on real hardware:**
+- Real Apple App Attest (Apple-issued 3,975-byte receipt stored; fabricated attestations 401)
+- Report submission from device (201, caller name stored)
+- Blocklist delta sync + CallKit reload
+- Admin override → `overridden_block` → survives recompute
+- Unblock tombstone: `allowlisted` while retaining `was_blockable=1`
+
+**Deliberately NOT claimed — needs a second phone line to call from:**
+- An actual incoming call being blocked (REQ-08)
+- SMS classification in airplane mode (REQ-09)
+- `+12025550143` is staged as `overridden_block` and ready for that test.
+
+**Optional / deferred:**
+- APNs `.p8` absent, so silent push is a documented no-op (REQ-07)
+- Website runs with no `GITHUB_TOKEN` (60 req/hr unauthenticated; ETag 304s are free,
+  so it works, but shows the "stale" notice under load). Needs a fine-grained
+  public-repo read-only PAT in `/opt/hushield-web/.env`.
+- `core.hooksPath` was removed to unblock git; `make hooks` restores the pre-push gate
+  but re-trips the tooling's dangerous-config guard.
+- App Store listing name is "Hushield"; the brand and in-app display name are "HuShield".
+  Editable until first App Review submission.
 
 ## Accumulated Context
 
@@ -42,10 +58,11 @@ Progress: [████████░░] ~90% (Phases 1–2 complete; Phases 3
 
 - **Phase 1 — Community Backend:** merged to `main` 2026-07-19. App Attest challenge/verify, weighted decaying scoring with per-device trust, POST /reports, GET /blocklist delta (keyset pagination, neighbor-spoof, crowd caller-ID), admin overrides, FTC/FCC seeding, recompute cron.
 - **Phase 2 — Backend for the iOS Client:** merged to `main` 2026-07-21 (HEAD `814e23e`). `POST /api/v1/attest/assert` token refresh (migration 0003 `sign_count`, replay guard), blocklist removal tombstones `action:"unblock"` (migration 0004 `was_blockable`), `GET /api/v1/numbers/{e164}` (lookup), APNs silent push (migration 0005 push cols, `POST /api/v1/devices/push-token`, `internal/push`), true-delta recompute fix. Migrations now 0001–0005.
-- **Phase 3 — iOS App: SUBSTANTIALLY COMPLETE**, merged to `spam-ios-phase3`. `SpamFilterKit` framework: `APIClient` matching the exact backend wire contract, App Attest enrollment/refresh with both a real `DeviceAttestationProvider` and a `SimulatorAttestationProvider` stub, blocklist delta sync with tombstone handling, phone E.164↔Int64 conversion, keychain-backed token store, Call Directory + SMS Filter extensions (thin OS shims wrapping tested pure logic). Polished SwiftUI app (Report / Lookup / Status / Setup tabs, design system, view-models). Test coverage: 100 `SpamFilterKitTests` unit tests, `SpamFilterAppTests` view-model tests, an env-gated `IntegrationTests` suite that drives a real local backend, and an `SpamFilterUITests` XCUITest flow. Signed and building green for iOS Simulator with Team `997DW79YCR` / bundle `com.brahy.hushield`. **Not yet done (device-gated):** a physical-device build/run (real `DeviceAttestationProvider` only activates on-device), and enabling the two extensions under iOS Settings.
-- **Phase 4 — Production Hardening: SUBSTANTIALLY COMPLETE**, merged to `spam-ios-phase3`. Redis-backed `ChallengeStore` (config-selectable via `CHALLENGE_STORE`/`REDIS_URL`, default `memory`), `cmd/recompute -interval` continuous mode plus `launchd`/`cron` scheduler artifacts under `scripts/`, hard-fail prod config validation (`Load()` refuses to start with `ATTEST_MODE=apple` and a missing `APP_ID`/insecure `DEVICE_TOKEN_SECRET`/empty `ADMIN_TOKEN`), `.env.example` documenting every server env var, a containerized deploy scaffold (`Dockerfile`, `docker-compose.yml`, `scripts/deploy.sh`), and a local `make`-based test gate (`make test` = Go + iOS, `make deploy` depends on `make test`, `make hooks` installs a pre-push gate). Go coverage raised 76.7% → 86.7%. **Not yet done (device/deploy-gated):** real `ATTEST_MODE=apple` validated against a genuine physical-device attestation (needs Phase 3's device session first); the backend has not been deployed to a real host (`DEPLOY_TARGET` is unset — `scripts/deploy.sh` is a guarded no-op until a host is chosen); the `docker build` itself is **unverified** (no Docker daemon available in the build/dev environment that produced it).
+- **Phase 3 — iOS App: SUBSTANTIALLY COMPLETE**, merged to `spam-ios-phase3`. `SpamFilterKit` framework: `APIClient` matching the exact backend wire contract, App Attest enrollment/refresh with both a real `DeviceAttestationProvider` and a `SimulatorAttestationProvider` stub, blocklist delta sync with tombstone handling, phone E.164↔Int64 conversion, keychain-backed token store, Call Directory + SMS Filter extensions (thin OS shims wrapping tested pure logic). Polished SwiftUI app (Report / Lookup / Status / Setup tabs, design system, view-models). Test coverage: 100 `SpamFilterKitTests` unit tests, `SpamFilterAppTests` view-model tests, an env-gated `IntegrationTests` suite that drives a real local backend, and an `SpamFilterUITests` XCUITest flow. Signed and building green for iOS Simulator with Team `997DW79YCR` / bundle `com.brahy.hushield`. **COMPLETED 2026-07-28:** shipped to TestFlight (build 2), installed on a physical iPhone, both extensions enabled under iOS Settings, real App Attest verified.
+- **Phase 4 — Production Hardening: SUBSTANTIALLY COMPLETE**, merged to `spam-ios-phase3`. Redis-backed `ChallengeStore` (config-selectable via `CHALLENGE_STORE`/`REDIS_URL`, default `memory`), `cmd/recompute -interval` continuous mode plus `launchd`/`cron` scheduler artifacts under `scripts/`, hard-fail prod config validation (`Load()` refuses to start with `ATTEST_MODE=apple` and a missing `APP_ID`/insecure `DEVICE_TOKEN_SECRET`/empty `ADMIN_TOKEN`), `.env.example` documenting every server env var, a containerized deploy scaffold (`Dockerfile`, `docker-compose.yml`, `scripts/deploy.sh`), and a local `make`-based test gate (`make test` = Go + iOS, `make deploy` depends on `make test`, `make hooks` installs a pre-push gate). Go coverage raised 76.7% → 86.7%. **COMPLETED 2026-07-27/28:** deployed to `pm-prod-spamfilter` (10.30.1.244, arm64) at `https://api.hushield.com` under systemd behind nginx with a Let's Encrypt cert; real `ATTEST_MODE=apple` verified. `scripts/deploy.sh` was rewritten from a no-op into a working scp + systemctl deploy. The **Docker path was abandoned** — the image was never built, sets no `GOARCH`, and `docker-compose.yml` is dev-only with an empty MySQL root password; tracked as issue #1 to fix or delete.
 
-Repo health at sync time (2026-07-24): `go build ./...` clean.
+Repo health 2026-07-30: `go build ./...` clean; full iOS suite green (112 kit + 16 app
++ 6 UI); Go coverage 86.7% with `internal/config` at 100%.
 
 ### Blockers/Concerns
 

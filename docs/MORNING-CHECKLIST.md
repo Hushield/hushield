@@ -14,7 +14,12 @@ Identity/signing values used throughout (from `.planning/STATE.md`):
 
 ---
 
-## Step A — Four web-UI actions that block the TestFlight archive
+## Step A — ✅ DONE (2026-07-28). Four web-UI actions that blocked the TestFlight archive
+
+> All four were completed and the archive now builds. `scripts/testflight-release.sh`
+> automates the whole pipeline from here: preflight → archive → export → upload, and
+> it sets export compliance and attaches the build to the internal TestFlight group.
+> Kept below for the record and for anyone reproducing the setup on a fresh account.
 
 **Do these first.** The distribution archive currently fails, and these are the reason. None can be
 scripted: the App Store Connect API either does not expose the resource, or forbids creating it.

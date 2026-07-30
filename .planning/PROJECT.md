@@ -15,11 +15,11 @@ blocklist. Identity is an Apple App Attest key only: **no accounts, no PII.**
 - [x] REQ-05: Device-token lifecycle — attest → verify → assert-refresh — with strictly-increasing counter replay protection
 - [x] REQ-06: On-demand single-number reputation lookup (`GET /api/v1/numbers/{e164}`)
 - [x] REQ-07: Server-initiated silent APNs push nudging clients to refresh their blocklist
-- [ ] REQ-08: iOS Call Directory Extension — block + label incoming calls, honoring removal tombstones
-- [ ] REQ-09: iOS SMS Filter Extension — offline classification of incoming messages
-- [ ] REQ-10: iOS reporting UI — report spam/not-spam and contribute a community caller-ID name
-- [ ] REQ-11: Shared App-Group sync framework — App Attest enroll/refresh + blocklist delta sync across extensions
-- [ ] REQ-12: Production hardening — real Apple App Attest validated on a physical device, shared (non-process-local) challenge store, scheduled recompute cron
+- [~] REQ-08: iOS Call Directory Extension — block + label incoming calls, honoring removal tombstones. *Extension built, signed, and enabled on a physical device; CallKit reload succeeds. Not yet proven by an actual blocked call.*
+- [~] REQ-09: iOS SMS Filter Extension — offline classification of incoming messages. *Extension enabled on device; offline (airplane-mode) classification not yet exercised.*
+- [x] REQ-10: iOS reporting UI — report spam/not-spam and contribute a community caller-ID name. *Verified 2026-07-28: a report submitted from a physical device returned 201 and stored the caller name.*
+- [x] REQ-11: Shared App-Group sync framework — App Attest enroll/refresh + blocklist delta sync across extensions. *Verified 2026-07-28 on device: enrollment, delta sync, and CallKit reload all succeed.*
+- [x] REQ-12: Production hardening — real Apple App Attest validated on a physical device, shared (non-process-local) challenge store, scheduled recompute cron. *Verified 2026-07-28: real App Attest confirmed by an Apple-issued receipt; Redis store selectable; recompute on a systemd timer every 15 min.*
 
 ## Constraints
 
