@@ -1,9 +1,13 @@
 # Morning Device Checklist
 
-Everything below this line requires a physical iPhone, a chosen deploy host, or both — it's
-the only part of Phase 3/4 that couldn't be finished in the dev environment. Budget ~20–30 min
-for the device session (steps 1–7); the deploy section (step 8) is a separate, longer task once
-a host is chosen.
+**Status 2026-07-30:** the backend is deployed, the app is on TestFlight, and real App Attest is
+verified. What remains needs a **second phone line to call from**: confirming an actual incoming
+call is blocked, and confirming SMS classification works in airplane mode. `+12025550143` is
+already staged server-side as `overridden_block` for that test.
+
+Sections 0–3 below describe the original *local* device session against a Mac-hosted server. They
+are superseded for normal use — the TestFlight build talks to `https://api.hushield.com` directly —
+but kept for local debugging without a deploy.
 
 Identity/signing values used throughout (from `.planning/STATE.md`):
 
@@ -21,8 +25,8 @@ Identity/signing values used throughout (from `.planning/STATE.md`):
 > it sets export compliance and attaches the build to the internal TestFlight group.
 > Kept below for the record and for anyone reproducing the setup on a fresh account.
 
-**Do these first.** The distribution archive currently fails, and these are the reason. None can be
-scripted: the App Store Connect API either does not expose the resource, or forbids creating it.
+These four could not be scripted: the App Store Connect API either does not expose the resource or
+forbids creating it. All are now complete.
 
 Already done via the API, so skip these: bundle IDs `com.brahy.hushield` (`PBA3MXGGU7`),
 `com.brahy.hushield.CallDirectory` (`ZHW6JNSNP8`), `com.brahy.hushield.MessageFilter`
@@ -59,7 +63,8 @@ container, so both need it.
 
 The API refuses this outright: `POST /v1/apps` returns
 `403 The resource 'apps' does not allow 'CREATE'`. Note the App Store name must be globally unique —
-if "HuShield" is taken, pick a variant and tell me so I can align the site and docs.
+the listing was created as **"Hushield"** (lowercase s), which differs from the brand and the
+in-app display name "HuShield". Editable in App Store Connect until first App Review submission.
 
 ### Then the archive should build
 
