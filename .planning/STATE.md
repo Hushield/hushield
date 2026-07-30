@@ -20,7 +20,7 @@ Last activity: 2026-07-30 — verified the report → score → blocklist → to
   machine against production; promoted REQ-10/11/12; shipped build 2 with three fixes
   found during device testing.
 
-Progress: [██████████] ~97%
+Progress: [██████████] ~99%
 
 **Verified against production on real hardware:**
 - Real Apple App Attest (Apple-issued 3,975-byte receipt stored; fabricated attestations 401)
@@ -28,6 +28,20 @@ Progress: [██████████] ~97%
 - Blocklist delta sync + CallKit reload
 - Admin override → `overridden_block` → survives recompute
 - Unblock tombstone: `allowlisted` while retaining `was_blockable=1`
+- `scripts/smoke-prod.sh`: 17/17 against `https://api.hushield.com`, including a
+  forged attestation being rejected (which a mock-mode deployment would fail)
+- Docker image builds for linux/arm64 AND linux/amd64; the compose stack passes
+  all 10 steps of `scripts/smoke.sh`
+
+**Issue tracker: 9 of 11 closed.** Two open, both genuinely blocked:
+- **#10 CI workflow** — written, validated locally, committed on the `ci-workflow`
+  branch. Push is refused: the token lacks the `workflow` OAuth scope. Confirmed
+  empirically that the Contents API is blocked too (returns 404 for
+  `.github/workflows/`, while an ordinary path writes fine). Unblock with
+  `gh auth refresh -s workflow`, then `git push origin ci-workflow:main`.
+- **#13 strict mode** — a designed, researched feature request. Blocked on a
+  10-minute device experiment that decides the architecture: does a Call Directory
+  identification entry exempt a number from iOS's Silence Unknown Callers?
 
 **Deliberately NOT claimed — needs a second phone line to call from:**
 - An actual incoming call being blocked (REQ-08)
@@ -35,14 +49,16 @@ Progress: [██████████] ~97%
 - `+12025550143` is staged as `overridden_block` and ready for that test.
 
 **Optional / deferred:**
-- APNs `.p8` absent, so silent push is a documented no-op (REQ-07)
-- Website runs with no `GITHUB_TOKEN` (60 req/hr unauthenticated; ETag 304s are free,
-  so it works, but shows the "stale" notice under load). Needs a fine-grained
-  public-repo read-only PAT in `/opt/hushield-web/.env`.
-- `core.hooksPath` was removed to unblock git; `make hooks` restores the pre-push gate
-  but re-trips the tooling's dangerous-config guard.
-- App Store listing name is "Hushield"; the brand and in-app display name are "HuShield".
-  Editable until first App Review submission.
+- APNs `.p8` absent, so silent push is a documented no-op (REQ-07). The broadcast
+  code path is nonetheless covered via an injectable notifier.
+- Website runs with no `GITHUB_TOKEN` (60 req/hr unauthenticated; ETag 304s are
+  free, so it works, but shows the "stale" notice under load).
+- `core.hooksPath` was removed to unblock git; `make hooks` restores the pre-push
+  gate but re-trips the tooling's dangerous-config guard.
+- App Store listing name is "Hushield"; the brand and in-app display name are
+  "HuShield". The ASC API refuses `name` on UPDATE, so this is a web-UI edit.
+
+Go coverage **90.4%** across 15 packages; iOS suite 112 kit + 16 app + 6 UI.
 
 ## Accumulated Context
 
