@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -30,31 +31,44 @@ import (
 )
 
 func main() {
-	notify := flag.Bool("notify", true, "send a silent APNs refresh push to registered devices after recompute (no-op when APNs creds are absent)")
-	interval := flag.Duration("interval", 0, "if > 0, run continuously, repeating every interval, until SIGINT/SIGTERM (0 = run once and exit, the default)")
-	flag.Parse()
+	if err := run(os.Args[1:]); err != nil {
+		log.Fatalf("%v", err)
+	}
+}
+
+// run is main's body with the process-exiting removed, so the wiring — flag
+// parsing, config loading, and the one-shot vs interval decision — can be
+// tested. It returns an error rather than calling log.Fatalf, and only main
+// terminates the process.
+//
+// This exists because the wiring is exactly where a deploy breaks: a bad flag
+// or a config that fails validation used to be provable only by running the
+// binary and reading the output.
+func run(args []string) error {
+	fs := flag.NewFlagSet("recompute", flag.ContinueOnError)
+	notify := fs.Bool("notify", true, "send a silent APNs refresh push to registered devices after recompute (no-op when APNs creds are absent)")
+	interval := fs.Duration("interval", 0, "if > 0, run continuously, repeating every interval, until SIGINT/SIGTERM (0 = run once and exit, the default)")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parsing flags: %w", err)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 
 	sqlDB, err := db.Open(cfg.DBDsn)
 	if err != nil {
-		log.Fatalf("connecting to database: %v", err)
+		return fmt.Errorf("connecting to database: %w", err)
 	}
 	defer sqlDB.Close()
 
 	if err := db.Migrate(sqlDB); err != nil {
-		log.Fatalf("running migrations: %v", err)
+		return fmt.Errorf("running migrations: %w", err)
 	}
 
 	if *interval <= 0 {
-		ctx := context.Background()
-		if err := runCycle(ctx, sqlDB, cfg, *notify); err != nil {
-			log.Fatalf("%v", err)
-		}
-		return
+		return runCycle(context.Background(), sqlDB, cfg, *notify)
 	}
 
 	// Interval mode: run immediately, then every interval, until SIGINT/SIGTERM
@@ -78,6 +92,7 @@ func main() {
 	})
 
 	log.Printf("recompute: shutting down")
+	return nil
 }
 
 // runCycle performs a single recompute-and-notify cycle: it re-applies
