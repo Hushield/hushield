@@ -95,6 +95,11 @@ func run(args []string) error {
 	return nil
 }
 
+// newNotifier is indirected through a variable so tests can inject a fake and
+// exercise the broadcast path -- ListPushTargets and BroadcastRefresh -- which
+// otherwise requires a real Apple .p8 auth key and so was unreachable.
+var newNotifier = push.NewNotifier
+
 // runCycle performs a single recompute-and-notify cycle: it re-applies
 // time-decay, recomputes cached number/device status via store.RecomputeAll,
 // and (when notify is true) broadcasts a silent refresh push to registered
@@ -121,7 +126,7 @@ func runCycle(ctx context.Context, sqlDB *sql.DB, cfg config.Config, notify bool
 	// which makes NewNotifier fatal) can never fail a recompute that already
 	// succeeded. When -notify is off we simply skip pushing.
 	if notify {
-		notifier, realAPNs, err := push.NewNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
+		notifier, realAPNs, err := newNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
 		if err != nil {
 			return fmt.Errorf("building push notifier: %w", err)
 		}
