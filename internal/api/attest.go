@@ -14,6 +14,7 @@ import (
 	"spamfilter/internal/attest"
 	"spamfilter/internal/store"
 	"spamfilter/internal/token"
+	"spamfilter/internal/trust"
 )
 
 // attestHandler serves the App Attest challenge/verify endpoints. It converts
@@ -234,19 +235,21 @@ func (h *attestHandler) handleAssert(w http.ResponseWriter, r *http.Request) {
 }
 
 // upsertDevice inserts or updates the device row keyed by key_id and returns
-// its device_id. New rows take the schema default trust_weight (0.50, matching trust.TrustBase).
+// its device_id. New rows get trust.TrustBase so enrolment matches what
+// trust.Compute returns before any reports or tenure accumulate; existing
+// rows keep their recomputed trust_weight (UPDATE clause leaves it alone).
 func upsertDevice(ctx context.Context, db *sql.DB, keyID string, publicKey, receipt []byte, now time.Time) (uint64, error) {
 	if db == nil {
 		return 0, errors.New("api: nil database handle")
 	}
 
-	const upsert = `INSERT INTO devices (key_id, public_key, receipt, last_seen_at)
-VALUES (?, ?, ?, ?)
+	const upsert = `INSERT INTO devices (key_id, public_key, receipt, last_seen_at, trust_weight)
+VALUES (?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
     public_key = VALUES(public_key),
     receipt = VALUES(receipt),
     last_seen_at = VALUES(last_seen_at)`
-	if _, err := db.ExecContext(ctx, upsert, keyID, publicKey, receipt, now.UTC()); err != nil {
+	if _, err := db.ExecContext(ctx, upsert, keyID, publicKey, receipt, now.UTC(), trust.TrustBase); err != nil {
 		return 0, err
 	}
 
