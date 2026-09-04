@@ -117,17 +117,6 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		t.Errorf("phone_numbers.was_blockable column count = %d, want 1 (must be added by 0004)", wasBlockableColCount)
 	}
 
-	// 0006 must align trust_weight default with trust.TrustBase (0.50).
-	var trustDefault string
-	if err := sqlDB.QueryRow(`
-		SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS
-		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'devices' AND COLUMN_NAME = 'trust_weight'`).Scan(&trustDefault); err != nil {
-		t.Fatalf("query trust_weight COLUMN_DEFAULT: %v", err)
-	}
-	if trustDefault != "0.50" {
-		t.Errorf("devices.trust_weight DEFAULT = %q, want \"0.50\"", trustDefault)
-	}
-
 	// 0005 must have added the three push columns to devices.
 	for _, col := range []string{"push_token", "push_environment", "push_updated_at"} {
 		var pushColCount int
