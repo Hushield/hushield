@@ -1,0 +1,2 @@
+ALTER TABLE devices
+  MODIFY trust_weight DECIMAL(5,2) NOT NULL DEFAULT 1.00;

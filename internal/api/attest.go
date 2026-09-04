@@ -234,7 +234,7 @@ func (h *attestHandler) handleAssert(w http.ResponseWriter, r *http.Request) {
 }
 
 // upsertDevice inserts or updates the device row keyed by key_id and returns
-// its device_id. New rows take the schema default trust_weight.
+// its device_id. New rows take the schema default trust_weight (0.50, matching trust.TrustBase).
 func upsertDevice(ctx context.Context, db *sql.DB, keyID string, publicKey, receipt []byte, now time.Time) (uint64, error) {
 	if db == nil {
 		return 0, errors.New("api: nil database handle")

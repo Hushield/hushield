@@ -64,7 +64,7 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		}
 	}
 
-	const wantMigrations = 5 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count, 0004_was_blockable, 0005_push_tokens
+	const wantMigrations = 6 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count, 0004_was_blockable, 0005_push_tokens, 0006_trust_weight_default
 
 	var migrationRowCount int
 	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationRowCount); err != nil {
@@ -117,6 +117,17 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		t.Errorf("phone_numbers.was_blockable column count = %d, want 1 (must be added by 0004)", wasBlockableColCount)
 	}
 
+	// 0006 must align trust_weight default with trust.TrustBase (0.50).
+	var trustDefault string
+	if err := sqlDB.QueryRow(`
+		SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'devices' AND COLUMN_NAME = 'trust_weight'`).Scan(&trustDefault); err != nil {
+		t.Fatalf("query trust_weight COLUMN_DEFAULT: %v", err)
+	}
+	if trustDefault != "0.50" {
+		t.Errorf("devices.trust_weight DEFAULT = %q, want \"0.50\"", trustDefault)
+	}
+
 	// 0005 must have added the three push columns to devices.
 	for _, col := range []string{"push_token", "push_environment", "push_updated_at"} {
 		var pushColCount int
@@ -129,6 +140,17 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		if pushColCount != 1 {
 			t.Errorf("devices.%s column count = %d, want 1 (must be added by 0005)", col, pushColCount)
 		}
+	}
+
+	// 0006 must align devices.trust_weight default with trust.TrustBase (0.5).
+	var trustDefault string
+	if err := sqlDB.QueryRow(
+		"SELECT COLUMN_DEFAULT FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'devices' AND column_name = 'trust_weight'",
+	).Scan(&trustDefault); err != nil {
+		t.Fatalf("failed to read devices.trust_weight COLUMN_DEFAULT: %v", err)
+	}
+	if trustDefault != "0.50" {
+		t.Errorf("devices.trust_weight COLUMN_DEFAULT = %q, want %q (must be set by 0006)", trustDefault, "0.50")
 	}
 
 	// Second run must be a no-op: no error, no duplicate rows.
