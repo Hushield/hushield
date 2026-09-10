@@ -22,8 +22,8 @@ func TestSetupDB_AppliesAllMigrations(t *testing.T) {
 	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&applied); err != nil {
 		t.Fatalf("querying schema_migrations: %v", err)
 	}
-	if applied < 5 {
-		t.Errorf("schema_migrations has %d rows, want at least 5 (0001-0005)", applied)
+	if applied < 6 {
+		t.Errorf("schema_migrations has %d rows, want at least 6 (0001-0006)", applied)
 	}
 
 	// Spot-check the tables the rest of the suite writes to. information_schema

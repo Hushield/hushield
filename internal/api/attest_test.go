@@ -16,6 +16,7 @@ import (
 	"spamfilter/internal/config"
 	"spamfilter/internal/dbtest"
 	"spamfilter/internal/token"
+	"spamfilter/internal/trust"
 )
 
 func decodeEnvelope(t *testing.T, body []byte) (success bool, data json.RawMessage) {
@@ -220,6 +221,45 @@ func TestUpsertDevice_ClosedDB(t *testing.T) {
 	}
 }
 
+// TestUpsertDevice_EnrolmentTrustMatchesTrustBase guards issue #15: a freshly
+// enrolled device must store trust.TrustBase, not the historical 1.00 default,
+// so the first recompute does not look like an unexplained halving.
+func TestUpsertDevice_EnrolmentTrustMatchesTrustBase(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	deviceID, err := upsertDevice(ctx, database, "enrol-trust-key", []byte("pub"), []byte("receipt"), now)
+	if err != nil {
+		t.Fatalf("upsertDevice: %v", err)
+	}
+
+	var trustWeight float64
+	if err := database.QueryRowContext(ctx, "SELECT trust_weight FROM devices WHERE device_id = ?", deviceID).Scan(&trustWeight); err != nil {
+		t.Fatalf("select trust_weight: %v", err)
+	}
+	if trustWeight != trust.TrustBase {
+		t.Errorf("trust_weight = %v, want trust.TrustBase (%v)", trustWeight, trust.TrustBase)
+	}
+
+	// Schema default alone (insert omitting trust_weight) must also be TrustBase
+	// after migration 0006, so any other enrolment path stays aligned.
+	res, err := database.ExecContext(ctx, "INSERT INTO devices (key_id, public_key) VALUES (?, ?)", "schema-default-key", []byte("pub"))
+	if err != nil {
+		t.Fatalf("insert omitting trust_weight: %v", err)
+	}
+	schemaID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("LastInsertId: %v", err)
+	}
+	if err := database.QueryRowContext(ctx, "SELECT trust_weight FROM devices WHERE device_id = ?", schemaID).Scan(&trustWeight); err != nil {
+		t.Fatalf("select schema-default trust_weight: %v", err)
+	}
+	if trustWeight != trust.TrustBase {
+		t.Errorf("schema-default trust_weight = %v, want trust.TrustBase (%v)", trustWeight, trust.TrustBase)
+	}
+}
+
 func TestVerifyEndpoint_BadBody(t *testing.T) {
 	h := newTestHandler(attest.NewMemoryChallengeStore(), attest.NewMockVerifier(nil, nil), nil)
 
@@ -351,10 +391,14 @@ func TestVerifyEndpoint_HappyPath_DB(t *testing.T) {
 		t.Fatal("device_token is empty")
 	}
 
-	// 3. Assert a device row exists for this key_id.
+	// 3. Assert a device row exists for this key_id at TrustBase (issue #15).
 	var deviceID uint64
-	if err := database.QueryRow("SELECT device_id FROM devices WHERE key_id = ?", keyID).Scan(&deviceID); err != nil {
+	var trustWeight float64
+	if err := database.QueryRow("SELECT device_id, trust_weight FROM devices WHERE key_id = ?", keyID).Scan(&deviceID, &trustWeight); err != nil {
 		t.Fatalf("device row not found: %v", err)
+	}
+	if trustWeight != trust.TrustBase {
+		t.Errorf("enrolment trust_weight = %v, want trust.TrustBase (%v)", trustWeight, trust.TrustBase)
 	}
 
 	// 4. Token parses to the same device_id.
