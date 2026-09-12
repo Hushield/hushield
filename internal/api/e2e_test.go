@@ -14,6 +14,8 @@ import (
 
 	"spamfilter/internal/config"
 	"spamfilter/internal/dbtest"
+	"spamfilter/internal/scoring"
+	"spamfilter/internal/trust"
 )
 
 // TestEndToEnd_FullLifecycle drives the entire router through real HTTP
@@ -37,8 +39,30 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 	client := server.Client()
 	base := server.URL
 
-	// --- 1. Attest 3 distinct devices -> 3 distinct device tokens. ---
-	keyIDs := []string{"e2e-device-1", "e2e-device-2", "e2e-device-3"}
+	// Guard the arithmetic every expectation below depends on. Commit 52184d5
+	// changed new-device trust_weight from 1.00 to TrustBase (0.50) and left
+	// this test asserting the old numbers, so it failed with a bare "want
+	// block" that named neither the cause nor the constant that moved. If a
+	// constant changes again, fail here with the reason instead.
+	if trust.TrustBase != 0.5 || scoring.BaseWeight != 1.0 ||
+		scoring.BlockThreshold != 5.0 || scoring.SuspectThreshold != 2.0 {
+		t.Fatalf("scoring constants moved -- recheck every report count in this test: "+
+			"TrustBase=%v BaseWeight=%v BlockThreshold=%v SuspectThreshold=%v",
+			trust.TrustBase, scoring.BaseWeight, scoring.BlockThreshold, scoring.SuspectThreshold)
+	}
+
+	// --- 1. Attest 6 distinct devices -> 6 distinct device tokens. ---
+	//
+	// Six, not three: a fresh device carries trust.TrustBase (0.5), so one
+	// scam report contributes BaseWeight(1.0) * 0.5 * scamMultiplier(2.0) =
+	// 1.0. Five would hit BlockThreshold exactly, and exact is not safe --
+	// reports age a fraction of a second before recompute reads them, so
+	// decay is a hair under 1.0 and 5.0 lands just below the >= test. Six
+	// scores 6.0 and leaves margin.
+	keyIDs := []string{
+		"e2e-device-1", "e2e-device-2", "e2e-device-3",
+		"e2e-device-4", "e2e-device-5", "e2e-device-6",
+	}
 	tokens := make([]string, len(keyIDs))
 	for i, keyID := range keyIDs {
 		tokens[i] = e2eAttestDevice(t, client, base, keyID)
@@ -46,11 +70,15 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 			t.Fatalf("attest device %s: empty device token", keyID)
 		}
 	}
-	if tokens[0] == tokens[1] || tokens[0] == tokens[2] || tokens[1] == tokens[2] {
-		t.Fatalf("attested device tokens are not distinct: %v", tokens)
+	seen := make(map[string]bool, len(tokens))
+	for _, tok := range tokens {
+		if seen[tok] {
+			t.Fatalf("attested device tokens are not distinct: %v", tokens)
+		}
+		seen[tok] = true
 	}
 
-	// --- 2. All 3 devices report numberA as scam/spam -> blocked. ---
+	// --- 2. All 6 devices report numberA as scam/spam -> blocked. ---
 	numberA := "+14155550188"
 	for i, tok := range tokens {
 		status, body := e2ePostJSON(t, client, base+"/api/v1/reports", tok, map[string]string{
@@ -66,13 +94,13 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 	entries := e2eBlocklist(t, client, base, tokens[0], "since=0")
 	entryA, ok := e2eFindEntry(entries, numberA)
 	if !ok {
-		t.Fatalf("numberA %q missing from blocklist after 3 scam reports; entries=%+v", numberA, entries)
+		t.Fatalf("numberA %q missing from blocklist after 6 scam reports; entries=%+v", numberA, entries)
 	}
 	if entryA.Action != "block" {
-		t.Errorf("numberA action = %q, want %q (3 fresh scam x trust 1.0 = 6.0 >= 5.0 block threshold)", entryA.Action, "block")
+		t.Errorf("numberA action = %q, want %q (6 fresh scam reports x TrustBase 0.5 x scam 2.0 = 6.0 >= 5.0 block threshold)", entryA.Action, "block")
 	}
 
-	// --- 3. Same 3 devices counter-report not_spam -> no longer a block entry. ---
+	// --- 3. Same 6 devices counter-report not_spam -> no longer a block entry. ---
 	for i, tok := range tokens {
 		status, body := e2ePostJSON(t, client, base+"/api/v1/reports", tok, map[string]string{
 			"number": numberA,
@@ -96,8 +124,10 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 	// suspected/blocked; assert the caller name surfaces and the
 	// neighbor-spoof flag is prefix-scoped. numberB shares numberA's
 	// "415555" NPA-NXX so a prefix=415555 query exercises the spoof flag.
+	// Three reporters, not two: two would score exactly SuspectThreshold and
+	// flake for the same decay reason documented above.
 	numberB := "+14155559876"
-	for i, tok := range tokens[:2] {
+	for i, tok := range tokens[:3] {
 		status, body := e2ePostJSON(t, client, base+"/api/v1/reports", tok, map[string]string{
 			"number":   numberB,
 			"category": "scam",
@@ -109,10 +139,10 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 		}
 	}
 
-	entries = e2eBlocklist(t, client, base, tokens[2], "since=0")
+	entries = e2eBlocklist(t, client, base, tokens[3], "since=0")
 	entryB, ok := e2eFindEntry(entries, numberB)
 	if !ok {
-		t.Fatalf("numberB %q missing from blocklist after 2 named scam reports; entries=%+v", numberB, entries)
+		t.Fatalf("numberB %q missing from blocklist after 3 named scam reports; entries=%+v", numberB, entries)
 	}
 	if entryB.Name == nil || *entryB.Name != "Test Spammer" {
 		t.Errorf("numberB name = %v, want %q", entryB.Name, "Test Spammer")
@@ -121,7 +151,7 @@ func TestEndToEnd_FullLifecycle(t *testing.T) {
 		t.Errorf("numberB spoof_suspected = true without a prefix param, want false")
 	}
 
-	prefixedEntries := e2eBlocklist(t, client, base, tokens[2], "since=0&prefix=415555")
+	prefixedEntries := e2eBlocklist(t, client, base, tokens[3], "since=0&prefix=415555")
 	prefixedEntryB, ok := e2eFindEntry(prefixedEntries, numberB)
 	if !ok {
 		t.Fatalf("numberB %q missing from prefix-scoped blocklist; entries=%+v", numberB, prefixedEntries)
