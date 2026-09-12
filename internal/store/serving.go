@@ -13,6 +13,11 @@ import (
 // snapshot would be wasted work.
 const servingColumns = `phone_number_id, number, cached_score, status, was_blockable, updated_at`
 
+// servableStatuses is the status set blocklistBaseQuery serves, and therefore
+// the set ServableCount counts. The two must agree or a client's progress bar
+// gets a denominator that does not describe what it is receiving.
+const servableStatuses = `('blocked','overridden_block','suspected')`
+
 // The two fixed serving slots. Nothing is ever moved between them: the decay
 // pass fills whichever one is not live, and the switch is a pointer update
 // (see SwapBlocklistServing). Migration 0009 replaced a RENAME TABLE swap with
@@ -107,8 +112,19 @@ SELECT ` + servingColumns + ` FROM phone_numbers`
 		return fmt.Errorf("store: populating standby slot %s: %w", standby, err)
 	}
 
-	const pointerUpdate = `UPDATE blocklist_serving_slot SET active_slot = ?, swapped_at = CURRENT_TIMESTAMP WHERE slot_id = 1`
-	if _, err := db.ExecContext(ctx, pointerUpdate, standby); err != nil {
+	// Count while the rebuild is still fresh in the buffer pool, and publish it
+	// in the same UPDATE that moves the pointer, so the count a reader sees
+	// always describes the slot it is being pointed at.
+	var servable int64
+	countQuery := `SELECT COUNT(*) FROM ` + standbyTable + ` WHERE status IN ` + servableStatuses
+	if err := db.QueryRowContext(ctx, countQuery).Scan(&servable); err != nil {
+		return fmt.Errorf("store: counting servable rows in slot %s: %w", standby, err)
+	}
+
+	const pointerUpdate = `UPDATE blocklist_serving_slot
+SET active_slot = ?, servable_count = ?, swapped_at = CURRENT_TIMESTAMP
+WHERE slot_id = 1`
+	if _, err := db.ExecContext(ctx, pointerUpdate, standby, servable); err != nil {
 		return fmt.Errorf("store: pointing serving slot at %s: %w", standby, err)
 	}
 
@@ -154,3 +170,19 @@ func withServingTable(query, table string) string {
 // servingTablePlaceholder is what the delta query constants are written
 // against, so they stay readable instead of being assembled from fragments.
 const servingTablePlaceholder = "{{serving}}"
+
+// ServableCount reports how many rows the live slot can serve, cached by the
+// last rebuild. It is the denominator a syncing client shows progress against.
+//
+// This is intentionally the cached value, not a live COUNT(*): the count is
+// only needed as a progress denominator, and recounting 732k rows on every one
+// of a sync's ~733 requests would cost far more than the drift is worth. See
+// migration 0010 for what that drift is.
+func ServableCount(ctx context.Context, q Execer) (int64, error) {
+	var count int64
+	err := q.QueryRowContext(ctx, `SELECT servable_count FROM blocklist_serving_slot WHERE slot_id = 1`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("store: reading servable count: %w", err)
+	}
+	return count, nil
+}

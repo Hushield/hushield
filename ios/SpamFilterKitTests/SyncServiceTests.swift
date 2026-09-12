@@ -34,11 +34,15 @@ final class SyncServiceTests: XCTestCase {
         entries: [(number: String, action: String, name: String?)],
         count: Int,
         cursor: String,
-        requestID: String = "req-b"
+        requestID: String = "req-b",
+        total: Int? = nil
     ) {
         let entriesJSON = entries.map { entryJSON(number: $0.number, action: $0.action, name: $0.name) }.joined(separator: ",")
+        // total is omitted entirely when nil, which is how a server predating
+        // the field behaves -- decoding must survive that.
+        let totalJSON = total.map { ",\"total\":\($0)" } ?? ""
         transport.enqueue((jsonData("""
-        {"success":true,"data":{"entries":[\(entriesJSON)],"count":\(count),"cursor":"\(cursor)"},"errors":[],"meta":{"timestamp":"2026-07-23T12:00:00Z","request_id":"\(requestID)"}}
+        {"success":true,"data":{"entries":[\(entriesJSON)],"count":\(count),"cursor":"\(cursor)"\(totalJSON)},"errors":[],"meta":{"timestamp":"2026-07-23T12:00:00Z","request_id":"\(requestID)"}}
         """), makeHTTPResponse(url: baseURL, status: 200)))
     }
 
@@ -233,6 +237,83 @@ final class SyncServiceTests: XCTestCase {
         XCTAssertTrue(reloader.reloadedIdentifiers.isEmpty, "must not reload when sync() doesn't complete the loop")
     }
 
+    // MARK: - Progress reporting
+
+    /// A first sync pages through the whole blocklist, so the Status screen
+    /// needs a number after every page, not just at the end.
+    func test_sync_reportsProgressAfterEachPage_withServerTotal() async throws {
+        let transport = MockTransport()
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155551111", action: "block", name: nil),
+            (number: "+14155552222", action: "block", name: nil),
+        ], count: 2, cursor: "100.2", total: 5)
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155553333", action: "block", name: nil),
+            (number: "+14155554444", action: "block", name: nil),
+        ], count: 2, cursor: "100.4", total: 5)
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155555555", action: "block", name: nil),
+        ], count: 1, cursor: "100.5", total: 5)
+
+        let store = BlocklistStore(directory: tempDirectory)
+        let reloader = SpyCallDirectoryReloader()
+        let service = makeService(transport: transport, store: store, reloader: reloader, pageLimit: 2)
+
+        let collected = Collector()
+        try await service.sync(onProgress: { collected.append($0) })
+
+        XCTAssertEqual(collected.values, [
+            SyncProgress(applied: 2, total: 5),
+            SyncProgress(applied: 4, total: 5),
+            SyncProgress(applied: 5, total: 5),
+        ], "progress must be cumulative across pages and carry the server's total")
+    }
+
+    /// A server that does not send a total must still sync; the client just
+    /// has no fraction to draw.
+    func test_sync_withoutServerTotal_reportsCountsAndNoFraction() async throws {
+        let transport = MockTransport()
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155551111", action: "block", name: nil),
+        ], count: 1, cursor: "100.1")
+
+        let store = BlocklistStore(directory: tempDirectory)
+        let reloader = SpyCallDirectoryReloader()
+        let service = makeService(transport: transport, store: store, reloader: reloader, pageLimit: 2)
+
+        let collected = Collector()
+        try await service.sync(onProgress: { collected.append($0) })
+
+        XCTAssertEqual(collected.values, [SyncProgress(applied: 1, total: 0)])
+        XCTAssertNil(collected.values.first?.fraction, "no total means no fraction, not a divide by zero")
+    }
+
+    /// Omitting the handler must cost nothing and change nothing.
+    func test_sync_withoutProgressHandler_stillCompletes() async throws {
+        let transport = MockTransport()
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155551111", action: "block", name: nil),
+        ], count: 1, cursor: "100.1", total: 1)
+
+        let store = BlocklistStore(directory: tempDirectory)
+        let reloader = SpyCallDirectoryReloader()
+        let service = makeService(transport: transport, store: store, reloader: reloader, pageLimit: 2)
+
+        try await service.sync()
+
+        XCTAssertEqual(store.load().cursor, "100.1")
+        XCTAssertEqual(reloader.reloadedIdentifiers, [callDirectoryIdentifier])
+    }
+
+    /// The delta also carries "unblock" tombstones, which the server's total
+    /// does not count, so applied can legitimately exceed total. A bar past
+    /// its end reads as a bug.
+    func test_syncProgress_fractionIsClampedAndNilWithoutTotal() {
+        XCTAssertEqual(SyncProgress(applied: 5, total: 10).fraction, 0.5)
+        XCTAssertEqual(SyncProgress(applied: 30, total: 10).fraction, 1.0, "fraction must clamp at 1.0")
+        XCTAssertNil(SyncProgress(applied: 7, total: 0).fraction)
+    }
+
     // MARK: - Batched saves
 
     /// `sync()` writes state every `pagesPerSave` pages instead of after each
@@ -338,5 +419,24 @@ final class SyncServiceTests: XCTestCase {
         let final = store.load()
         XCTAssertEqual(final.blocked, [14_155_552_222])
         XCTAssertEqual(final.cursor, "100.3")
+    }
+}
+
+/// Collects progress updates from the sync's `@Sendable` handler. A plain
+/// array captured in that closure is a data race; this funnels through a lock.
+private final class Collector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [SyncProgress] = []
+
+    func append(_ value: SyncProgress) {
+        lock.lock()
+        storage.append(value)
+        lock.unlock()
+    }
+
+    var values: [SyncProgress] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }

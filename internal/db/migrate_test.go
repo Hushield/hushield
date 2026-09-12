@@ -64,7 +64,7 @@ func TestMigrate_CreatesAllFiveTablesAndIsIdempotent(t *testing.T) {
 		}
 	}
 
-	const wantMigrations = 9 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count, 0004_was_blockable, 0005_push_tokens, 0006_trust_weight_default, 0007_blocklist_keyset_index, 0008_blocklist_serving_swap, 0009_serving_slot_pointer
+	const wantMigrations = 10 // 0001_init, 0002_drop_duplicate_number_index, 0003_device_sign_count, 0004_was_blockable, 0005_push_tokens, 0006_trust_weight_default, 0007_blocklist_keyset_index, 0008_blocklist_serving_swap, 0009_serving_slot_pointer, 0010_serving_servable_count
 
 	var migrationRowCount int
 	if err := sqlDB.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationRowCount); err != nil {

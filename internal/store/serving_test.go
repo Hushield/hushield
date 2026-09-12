@@ -205,3 +205,42 @@ func TestServingTable_rejectsUnknownSlot(t *testing.T) {
 		t.Fatal("standbySlot accepted an unknown slot")
 	}
 }
+
+// The progress denominator a client divides by. It must count only what the
+// delta actually serves, or the bar describes something other than what is
+// arriving.
+func TestSwapBlocklistServing_publishesServableCountForServableRowsOnly(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Two servable numbers...
+	blockableNumber(t, sqlDB, ctx, "+14155559841", "count-block-1", now)
+	blockableNumber(t, sqlDB, ctx, "+14155559842", "count-block-2", now)
+	// ...and one with no reports at all, which stays 'unknown' and is not served.
+	if _, err := UpsertPhoneNumber(ctx, sqlDB, "+14155559843", now); err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+
+	if err := SwapBlocklistServing(ctx, sqlDB); err != nil {
+		t.Fatalf("SwapBlocklistServing: %v", err)
+	}
+
+	count, err := ServableCount(ctx, sqlDB)
+	if err != nil {
+		t.Fatalf("ServableCount: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("ServableCount = %d, want 2 (the unknown-status number must not be counted)", count)
+	}
+
+	// The denominator must agree with what the delta hands back, which is the
+	// whole point of caching it.
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 100)
+	if err != nil {
+		t.Fatalf("BlocklistDelta: %v", err)
+	}
+	if int64(len(entries)) != count {
+		t.Fatalf("delta returned %d entries but the published count is %d", len(entries), count)
+	}
+}

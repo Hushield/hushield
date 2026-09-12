@@ -1,5 +1,30 @@
 import Foundation
 
+/// How far a sync has got. `total` of 0 means the server did not supply one,
+/// in which case there is no meaningful fraction to show.
+public struct SyncProgress: Equatable, Sendable {
+    /// Entries folded into local state so far, across every page.
+    public let applied: Int
+    /// Servable rows the server reports having, or 0 if unknown.
+    public let total: Int
+
+    public init(applied: Int, total: Int) {
+        self.applied = applied
+        self.total = total
+    }
+
+    /// Completion in 0...1, or nil when no total is available.
+    ///
+    /// Clamped deliberately. `total` counts servable rows, but a delta also
+    /// carries "unblock" tombstones that are not in that count, so a
+    /// removal-heavy sync legitimately applies more entries than the total.
+    /// A bar that runs past its end reads as a bug; this reads as done.
+    public var fraction: Double? {
+        guard total > 0 else { return nil }
+        return min(1.0, Double(applied) / Double(total))
+    }
+}
+
 /// Orchestrates a full blocklist sync: pages through `APIClient.blocklist`
 /// from the locally stored cursor, folds each page into `BlocklistState`
 /// via `applying(_:newCursor:)`, persists after every page, then asks the
@@ -73,10 +98,14 @@ public final class SyncService {
     ///    the loop stops rather than re-requesting the same page forever.
     /// 4. Once the loop ends, reloads the Call Directory extension so it
     ///    picks up the freshly synced data.
-    public func sync() async throws {
+    /// - Parameter onProgress: called after each page is folded in, on
+    ///   whatever context the page completed on. Optional so callers that do
+    ///   not render progress -- the extensions, tests -- pay nothing.
+    public func sync(onProgress: (@Sendable (SyncProgress) -> Void)? = nil) async throws {
         var state = store.load()
         var cursor = state.cursor
         var unsavedPages = 0
+        var applied = 0
 
         func persistPendingPages() throws {
             guard unsavedPages > 0 else { return }
@@ -101,6 +130,8 @@ public final class SyncService {
             }
 
             state = state.applying(response.entries, newCursor: response.cursor)
+            applied += response.entries.count
+            onProgress?(SyncProgress(applied: applied, total: response.total ?? 0))
             unsavedPages += 1
             if unsavedPages >= pagesPerSave {
                 try persistPendingPages()

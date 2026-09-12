@@ -35,6 +35,13 @@ type blocklistResponse struct {
 	Entries []blocklistEntryResponse `json:"entries"`
 	Count   int                      `json:"count"`
 	Cursor  string                   `json:"cursor"`
+	// Total is how many rows the live serving slot can serve, so a client
+	// paging a full sync has a denominator for progress. It is the cached
+	// count published at the last slot rebuild, NOT a live COUNT(*) -- see
+	// store.ServableCount. It counts servable rows only, so a delta carrying
+	// "unblock" tombstones can apply more entries than Total; a client must
+	// clamp rather than assume the fraction stays under 1.
+	Total int64 `json:"total"`
 }
 
 const (
@@ -71,10 +78,20 @@ func (h *blocklistHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A failure here must not fail the sync: the entries are already loaded and
+	// a missing denominator only costs the client its percentage, so log it and
+	// serve Total=0, which the client treats as "no total available".
+	total, err := store.ServableCount(r.Context(), h.db)
+	if err != nil {
+		logInternalError(requestID, "read servable count", err)
+		total = 0
+	}
+
 	resp := blocklistResponse{
 		Entries: make([]blocklistEntryResponse, 0, len(entries)),
 		Count:   len(entries),
 		Cursor:  formatCursor(nextSec, nextID),
+		Total:   total,
 	}
 	for _, e := range entries {
 		resp.Entries = append(resp.Entries, blocklistEntryResponse{
