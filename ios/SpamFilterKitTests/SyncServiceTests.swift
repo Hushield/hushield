@@ -58,6 +58,7 @@ final class SyncServiceTests: XCTestCase {
         store: BlocklistStore,
         reloader: SpyCallDirectoryReloader,
         pageLimit: Int = 2,
+        pagesPerSave: Int = 10,
         token: @escaping () async throws -> String = { "test-token" }
     ) -> SyncService {
         SyncService(
@@ -65,7 +66,8 @@ final class SyncServiceTests: XCTestCase {
             tokenProvider: token,
             store: store,
             reloader: reloader,
-            pageLimit: pageLimit
+            pageLimit: pageLimit,
+            pagesPerSave: pagesPerSave
         )
     }
 
@@ -228,6 +230,68 @@ final class SyncServiceTests: XCTestCase {
         }
 
         XCTAssertEqual(store.load().cursor, "100.2", "the first page's progress must survive a later page's failure")
+        XCTAssertTrue(reloader.reloadedIdentifiers.isEmpty, "must not reload when sync() doesn't complete the loop")
+    }
+
+    // MARK: - Batched saves
+
+    /// `sync()` writes state every `pagesPerSave` pages instead of after each
+    /// one, because `BlocklistStore.save` rewrites the entire state and
+    /// per-page saves made a full sync quadratic in disk writes. The failure
+    /// mode that batching introduces is forgetting the tail: a sync whose page
+    /// count never reaches `pagesPerSave` would persist nothing at all.
+    func test_sync_pageCountBelowPagesPerSave_stillPersistsEveryPage() async throws {
+        let transport = MockTransport()
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155551111", action: "block", name: nil),
+            (number: "+14155552222", action: "block", name: nil),
+        ], count: 2, cursor: "100.2")
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155553333", action: "block", name: nil),
+        ], count: 1, cursor: "100.3")
+
+        let store = BlocklistStore(directory: tempDirectory)
+        let reloader = SpyCallDirectoryReloader()
+        // Three pages folded, a save threshold far above that: only the tail
+        // save runs, and it must still capture everything.
+        let service = makeService(transport: transport, store: store, reloader: reloader, pageLimit: 2, pagesPerSave: 100)
+
+        try await service.sync()
+
+        let state = store.load()
+        XCTAssertEqual(state.cursor, "100.3")
+        XCTAssertEqual(state.blocked.count, 3, "the tail save must persist pages folded after the last batch boundary")
+        XCTAssertEqual(reloader.reloadedIdentifiers, [callDirectoryIdentifier])
+    }
+
+    /// Batching must not weaken the durability the per-page saves provided: a
+    /// failure persists whatever was folded in before it, so progress survives.
+    func test_sync_failureMidBatch_persistsPagesFoldedBeforeIt() async throws {
+        let transport = MockTransport()
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155551111", action: "block", name: nil),
+            (number: "+14155552222", action: "block", name: nil),
+        ], count: 2, cursor: "100.2")
+        enqueueBlocklistPage(transport, entries: [
+            (number: "+14155553333", action: "block", name: nil),
+            (number: "+14155554444", action: "block", name: nil),
+        ], count: 2, cursor: "100.4")
+        enqueueError(transport)
+
+        let store = BlocklistStore(directory: tempDirectory)
+        let reloader = SpyCallDirectoryReloader()
+        let service = makeService(transport: transport, store: store, reloader: reloader, pageLimit: 2, pagesPerSave: 100)
+
+        do {
+            try await service.sync()
+            XCTFail("expected sync() to rethrow the third page's error")
+        } catch APIClientError.api(let code, _, _, _) {
+            XCTAssertEqual(code, "internal_error")
+        }
+
+        let state = store.load()
+        XCTAssertEqual(state.cursor, "100.4", "both successful pages must survive the failure that followed them")
+        XCTAssertEqual(state.blocked.count, 4)
         XCTAssertTrue(reloader.reloadedIdentifiers.isEmpty, "must not reload when sync() doesn't complete the loop")
     }
 
