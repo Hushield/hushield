@@ -1,0 +1,47 @@
+[Unit]
+Description=HuShield FTC Do Not Call complaint import (one-shot)
+Documentation=https://github.com/Hushield/hushield
+Documentation=https://www.ftc.gov/policy-notices/open-government/data-sets/do-not-call-data
+After=network-online.target mysqld.service
+Requires=mysqld.service
+
+[Service]
+# One-shot: scripts/seed-ftc-daily.sh downloads the newest published FTC CSV,
+# imports it via bin/hushield-seed, and exits. Scheduling is the timer's job --
+# see hushield-seed-ftc.timer.
+Type=oneshot
+User=hushield
+Group=hushield
+WorkingDirectory=/opt/hushield
+ExecStart=/opt/hushield/scripts/seed-ftc-daily.sh
+# Shares the API's environment file so the DSN lives in exactly one place.
+# cmd/seed calls config.Load(), so it needs the same variables the API does.
+EnvironmentFile=/opt/hushield/.env
+
+# Imported numbers are BLOCKED outright, by explicit product decision.
+# score = BaseWeight(1.0) x trust(5.0, the TrustMax clamp) x category scam(2.0)
+# = 10.0, double BlockThreshold (5.0), so a seeded number blocks on import.
+#
+# Understand the trade-off before lowering or raising this. The FTC states that
+# none of the reported-call data is verified, and a complaint records the caller
+# ID that was DISPLAYED -- which is frequently spoofed -- so a spoofed number
+# belonging to an innocent third party is blocked on one stranger's complaint.
+# With the 30-day half-life, 10.0 stays above the block line for 30 days, then
+# labels for another ~40, then ages out entirely near day 70.
+Environment=SEED_TRUST=5.0
+Environment=SEED_CATEGORY=scam
+
+# The download needs egress to www.ftc.gov, so this unit is deliberately less
+# restricted than hushield-recompute, which touches nothing but MySQL.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hushield-seed-ftc
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/hushield
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+RestrictSUIDSGID=yes
