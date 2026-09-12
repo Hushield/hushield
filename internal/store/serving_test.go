@@ -157,3 +157,51 @@ func TestSwapBlocklistServing_preservesCursorSoClientsDoNotResync(t *testing.T) 
 		t.Fatalf("the swap restamped updated_at, so a caught-up client re-downloads everything: %+v", entries)
 	}
 }
+
+// The switch is a pointer flip, not a data move: each rebuild fills whichever
+// slot is not live and then points at it, so the active slot alternates. This
+// is what makes the switch free of DDL locks -- nothing is renamed, both
+// tables just sit there.
+func TestSwapBlocklistServing_alternatesTheActiveSlotPointer(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+
+	first, err := ActiveServingSlot(ctx, sqlDB)
+	if err != nil {
+		t.Fatalf("ActiveServingSlot: %v", err)
+	}
+
+	if err := SwapBlocklistServing(ctx, sqlDB); err != nil {
+		t.Fatalf("first SwapBlocklistServing: %v", err)
+	}
+	second, err := ActiveServingSlot(ctx, sqlDB)
+	if err != nil {
+		t.Fatalf("ActiveServingSlot after first swap: %v", err)
+	}
+	if second == first {
+		t.Fatalf("the pointer did not move off %q, so the rebuild overwrote the slot it was serving", first)
+	}
+
+	if err := SwapBlocklistServing(ctx, sqlDB); err != nil {
+		t.Fatalf("second SwapBlocklistServing: %v", err)
+	}
+	third, err := ActiveServingSlot(ctx, sqlDB)
+	if err != nil {
+		t.Fatalf("ActiveServingSlot after second swap: %v", err)
+	}
+	if third != first {
+		t.Fatalf("active slot = %q after two swaps, want it back at %q -- only two slots should ever be used", third, first)
+	}
+}
+
+// A slot value the store does not recognise must not be interpolated into a
+// query. The ENUM makes it unstorable, so this guards the code path rather
+// than the schema.
+func TestServingTable_rejectsUnknownSlot(t *testing.T) {
+	if _, err := servingTable("../etc/passwd"); err == nil {
+		t.Fatal("servingTable accepted an unknown slot; a pointer value must never reach a query as arbitrary text")
+	}
+	if _, err := standbySlot("c"); err == nil {
+		t.Fatal("standbySlot accepted an unknown slot")
+	}
+}

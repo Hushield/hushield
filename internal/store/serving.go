@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // servingColumns is the derived read model the blocklist delta serves. It is
@@ -12,54 +13,125 @@ import (
 // snapshot would be wasted work.
 const servingColumns = `phone_number_id, number, cached_score, status, was_blockable, updated_at`
 
-// SwapBlocklistServing rebuilds the standby copy of the blocklist read model
-// from phone_numbers and swaps it in atomically.
+// The two fixed serving slots. Nothing is ever moved between them: the decay
+// pass fills whichever one is not live, and the switch is a pointer update
+// (see SwapBlocklistServing). Migration 0009 replaced a RENAME TABLE swap with
+// this, because RENAME takes an exclusive metadata lock that every new reader
+// queues behind, and no data actually needs to move.
+const (
+	servingSlotA = "a"
+	servingSlotB = "b"
+)
+
+// servingTable maps a slot to its table name. It is the ONLY place a slot
+// becomes a table identifier, and it accepts nothing but the two known slots,
+// so a slot value from the database can never reach a query as arbitrary text.
+func servingTable(slot string) (string, error) {
+	switch slot {
+	case servingSlotA:
+		return "blocklist_serving_a", nil
+	case servingSlotB:
+		return "blocklist_serving_b", nil
+	default:
+		return "", fmt.Errorf("store: unknown serving slot %q", slot)
+	}
+}
+
+func standbySlot(active string) (string, error) {
+	switch active {
+	case servingSlotA:
+		return servingSlotB, nil
+	case servingSlotB:
+		return servingSlotA, nil
+	default:
+		return "", fmt.Errorf("store: unknown serving slot %q", active)
+	}
+}
+
+// ActiveServingSlot reads the pointer naming the live serving slot.
+func ActiveServingSlot(ctx context.Context, q Execer) (string, error) {
+	var slot string
+	err := q.QueryRowContext(ctx, `SELECT active_slot FROM blocklist_serving_slot WHERE slot_id = 1`).Scan(&slot)
+	if err != nil {
+		return "", fmt.Errorf("store: reading active serving slot: %w", err)
+	}
+	if _, err := servingTable(slot); err != nil {
+		return "", err
+	}
+	return slot, nil
+}
+
+// ActiveServingTable resolves the pointer to the live table name, for callers
+// that interpolate it into a query.
+func ActiveServingTable(ctx context.Context, q Execer) (string, error) {
+	slot, err := ActiveServingSlot(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	return servingTable(slot)
+}
+
+// SwapBlocklistServing rebuilds the standby slot from phone_numbers and then
+// points the API at it.
 //
-// phone_numbers remains the source of truth and is never swapped -- only this
-// derived projection is -- so a community report, attestation or admin
-// override landing mid-rebuild cannot be lost.
+// phone_numbers remains the source of truth and is never switched away from --
+// only this derived projection is -- so a community report, attestation or
+// admin override landing mid-rebuild cannot be lost.
 //
-// The point of the swap is that the decay pass rewrites derived state for
-// every number, which took 58m52s at 732k numbers. Without this, readers spent
-// that entire hour querying a table mid-rewrite. RENAME TABLE with multiple
-// pairs is a single atomic DDL statement in MySQL 8, so a reader gets either
-// the whole previous snapshot or the whole new one, and a failure mid-statement
-// rolls back every rename rather than leaving the tmp name behind.
+// The switch is a single-row UPDATE of blocklist_serving_slot. It holds no DDL
+// lock, so readers are never queued behind it: a request either resolves the
+// pointer before the update and serves the whole previous snapshot, or after
+// and serves the whole new one. Never a torn mixture, which matters because
+// the rebuild rewrites derived state for every number and took 58m52s at 732k.
 func SwapBlocklistServing(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `TRUNCATE TABLE blocklist_serving_next`); err != nil {
-		return fmt.Errorf("store: truncating standby serving table: %w", err)
+	active, err := ActiveServingSlot(ctx, db)
+	if err != nil {
+		return err
+	}
+	standby, err := standbySlot(active)
+	if err != nil {
+		return err
+	}
+	standbyTable, err := servingTable(standby)
+	if err != nil {
+		return err
 	}
 
-	insert := `INSERT INTO blocklist_serving_next (` + servingColumns + `)
+	if _, err := db.ExecContext(ctx, `TRUNCATE TABLE `+standbyTable); err != nil {
+		return fmt.Errorf("store: truncating standby slot %s: %w", standby, err)
+	}
+
+	insert := `INSERT INTO ` + standbyTable + ` (` + servingColumns + `)
 SELECT ` + servingColumns + ` FROM phone_numbers`
 	if _, err := db.ExecContext(ctx, insert); err != nil {
-		return fmt.Errorf("store: populating standby serving table: %w", err)
+		return fmt.Errorf("store: populating standby slot %s: %w", standby, err)
 	}
 
-	const swap = `RENAME TABLE
-	blocklist_serving TO blocklist_serving_tmp,
-	blocklist_serving_next TO blocklist_serving,
-	blocklist_serving_tmp TO blocklist_serving_next`
-	if _, err := db.ExecContext(ctx, swap); err != nil {
-		return fmt.Errorf("store: swapping serving table: %w", err)
+	const pointerUpdate = `UPDATE blocklist_serving_slot SET active_slot = ?, swapped_at = CURRENT_TIMESTAMP WHERE slot_id = 1`
+	if _, err := db.ExecContext(ctx, pointerUpdate, standby); err != nil {
+		return fmt.Errorf("store: pointing serving slot at %s: %w", standby, err)
 	}
 
 	return nil
 }
 
-// UpsertServingRow refreshes one number's row in the LIVE serving table.
+// UpsertServingRow refreshes one number's row in the LIVE serving slot.
 //
-// Without this, the serving copy would only advance at a swap, so a number
+// Without this, the serving copy would only advance at a switch, so a number
 // someone just reported would not reach devices until the next decay pass --
-// up to 6 hours. RecomputeNumber calls this inside the same transaction as the
-// report, which keeps the existing behaviour of a report taking effect
-// immediately while the bulk pass stays isolated behind the swap.
+// up to 6 hours. RecomputeNumberServing calls this inside the same transaction
+// as the report, which keeps the existing behaviour of a report taking effect
+// immediately while the bulk pass stays isolated behind the pointer.
 //
-// The swap overwrites these patches wholesale on its next run, which is
-// correct: it rebuilds from phone_numbers, where the same write already
-// landed.
+// The next rebuild overwrites these patches wholesale, which is correct: it
+// rebuilds from phone_numbers, where the same write already landed.
 func UpsertServingRow(ctx context.Context, exec Execer, phoneNumberID uint64) error {
-	const query = `INSERT INTO blocklist_serving (` + servingColumns + `)
+	table, err := ActiveServingTable(ctx, exec)
+	if err != nil {
+		return err
+	}
+
+	query := `INSERT INTO ` + table + ` (` + servingColumns + `)
 SELECT ` + servingColumns + ` FROM phone_numbers WHERE phone_number_id = ?
 ON DUPLICATE KEY UPDATE
 	number = VALUES(number),
@@ -72,3 +144,13 @@ ON DUPLICATE KEY UPDATE
 	}
 	return nil
 }
+
+// withServingTable substitutes the live slot's table name into a query
+// template written against the placeholder below.
+func withServingTable(query, table string) string {
+	return strings.ReplaceAll(query, servingTablePlaceholder, table)
+}
+
+// servingTablePlaceholder is what the delta query constants are written
+// against, so they stay readable instead of being assembled from fragments.
+const servingTablePlaceholder = "{{serving}}"

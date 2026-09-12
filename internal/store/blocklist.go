@@ -66,7 +66,7 @@ const blocklistPrefixLength = 6
 // a full table scan plus a filesort (measured: 0.771s per 500-row page against
 // 732k rows, ~1465 pages for a full sync). Here FROM_UNIXTIME is applied to the
 // PARAMETER, evaluated once, leaving updated_at bare so the range optimizer can
-// seek idx_blocklist_serving_updated_at_id (migration 0008) and walk in order.
+// seek the live slot's (updated_at, phone_number_id) index and walk in order.
 //
 // FROM_UNIXTIME(0) is '1970-01-01 00:00:00', not NULL, so the (0, 0) full
 // snapshot cursor compares correctly rather than yielding NULL and returning
@@ -78,12 +78,12 @@ const blocklistPrefixLength = 6
 // seeding stamps huge numbers of rows with identical updated_at values (732k
 // rows across 3 distinct timestamps after the FTC/FCC import), so
 // phone_number_id carries essentially the whole tiebreak.
-const keysetPredicate = `(blocklist_serving.updated_at, blocklist_serving.phone_number_id) > (FROM_UNIXTIME(?), ?)`
+const keysetPredicate = `({{serving}}.updated_at, {{serving}}.phone_number_id) > (FROM_UNIXTIME(?), ?)`
 
-const blocklistBaseQuery = `SELECT blocklist_serving.phone_number_id, blocklist_serving.number, blocklist_serving.status, blocklist_serving.updated_at, UNIX_TIMESTAMP(blocklist_serving.updated_at) FROM blocklist_serving
-WHERE blocklist_serving.status IN ('blocked','overridden_block','suspected')
+const blocklistBaseQuery = `SELECT {{serving}}.phone_number_id, {{serving}}.number, {{serving}}.status, {{serving}}.updated_at, UNIX_TIMESTAMP({{serving}}.updated_at) FROM {{serving}}
+WHERE {{serving}}.status IN ('blocked','overridden_block','suspected')
   AND ` + keysetPredicate + `
-ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC LIMIT ?`
+ORDER BY {{serving}}.updated_at ASC, {{serving}}.phone_number_id ASC LIMIT ?`
 
 // blocklistSpoofQuery finds sparse-signal numbers that spoof the caller's own
 // NPA-NXX prefix. Rationale: the spoof-adjusted score
@@ -92,12 +92,12 @@ ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC
 // deserves to be surfaced as a "label" entry even though the number's stored
 // status is still "unknown" (the cached status/score are computed without
 // knowledge of the querying caller's prefix).
-const blocklistSpoofQuery = `SELECT blocklist_serving.phone_number_id, blocklist_serving.number, blocklist_serving.status, blocklist_serving.updated_at, UNIX_TIMESTAMP(blocklist_serving.updated_at) FROM blocklist_serving
-WHERE blocklist_serving.number LIKE ?
-  AND blocklist_serving.status = 'unknown'
-  AND blocklist_serving.cached_score > 0
+const blocklistSpoofQuery = `SELECT {{serving}}.phone_number_id, {{serving}}.number, {{serving}}.status, {{serving}}.updated_at, UNIX_TIMESTAMP({{serving}}.updated_at) FROM {{serving}}
+WHERE {{serving}}.number LIKE ?
+  AND {{serving}}.status = 'unknown'
+  AND {{serving}}.cached_score > 0
   AND ` + keysetPredicate + `
-ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC LIMIT ?`
+ORDER BY {{serving}}.updated_at ASC, {{serving}}.phone_number_id ASC LIMIT ?`
 
 // blocklistRemovalQuery finds numbers that were once blockable
 // (was_blockable = 1, the sticky flag RecomputeNumber sets) and have since
@@ -107,18 +107,23 @@ ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC
 // leaves the blockable set would simply vanish from future deltas, leaving
 // an incremental client with no way to learn it should un-block it. Always
 // run, independent of prefix -- a removal is not a neighbor-spoof concept.
-const blocklistRemovalQuery = `SELECT blocklist_serving.phone_number_id, blocklist_serving.number, blocklist_serving.status, blocklist_serving.updated_at, UNIX_TIMESTAMP(blocklist_serving.updated_at) FROM blocklist_serving
-WHERE blocklist_serving.was_blockable = 1
-  AND blocklist_serving.status IN ('unknown','allowlisted')
+const blocklistRemovalQuery = `SELECT {{serving}}.phone_number_id, {{serving}}.number, {{serving}}.status, {{serving}}.updated_at, UNIX_TIMESTAMP({{serving}}.updated_at) FROM {{serving}}
+WHERE {{serving}}.was_blockable = 1
+  AND {{serving}}.status IN ('unknown','allowlisted')
   AND ` + keysetPredicate + `
-ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC LIMIT ?`
+ORDER BY {{serving}}.updated_at ASC, {{serving}}.phone_number_id ASC LIMIT ?`
 
-// Reads come from blocklist_serving, the swapped read model (migration 0008),
-// NOT from phone_numbers. The decay pass rewrites derived state for every
-// number and took 58m52s at 732k numbers; serving from a copy that is replaced
-// by an atomic RENAME means a reader sees one complete snapshot or the other,
-// never an hour-long partial rewrite. phone_numbers remains the source of
-// truth, so no write is lost -- see store.SwapBlocklistServing.
+// Reads come from whichever serving slot the blocklist_serving_slot pointer
+// names (migrations 0008/0009), NOT from phone_numbers. The decay pass
+// rewrites derived state for every number and took 58m52s at 732k numbers;
+// serving from the slot that is not being rebuilt means a reader sees one
+// complete snapshot or the other, never an hour-long partial rewrite.
+// phone_numbers remains the source of truth, so no write is lost -- see
+// store.SwapBlocklistServing.
+//
+// The table name is resolved once per call and substituted into the query
+// templates. It comes from servingTable, which accepts only the two known
+// slots, so a pointer value can never reach a query as arbitrary text.
 //
 // BlocklistDelta returns the numbers a device should block or label that
 // changed since the compound cursor (sinceSec, sinceID) -- (0, 0) for a full
@@ -132,7 +137,12 @@ ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC
 // (updated_at, phone_number_id) key of the last entry returned, or the
 // incoming cursor if nothing was returned.
 func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uint64, prefix string, limit int) ([]BlocklistEntry, int64, uint64, error) {
-	baseRows, err := queryBlocklistRows(ctx, db, blocklistBaseQuery, sinceSec, sinceID, limit)
+	servingTableName, err := ActiveServingTable(ctx, db)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	baseRows, err := queryBlocklistRows(ctx, db, withServingTable(blocklistBaseQuery, servingTableName), sinceSec, sinceID, limit)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -148,7 +158,7 @@ func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uin
 	}
 
 	if effectivePrefix != "" {
-		spoofRows, err := queryBlocklistRows(ctx, db, blocklistSpoofQuery, "+1"+effectivePrefix+"%", sinceSec, sinceID, limit)
+		spoofRows, err := queryBlocklistRows(ctx, db, withServingTable(blocklistSpoofQuery, servingTableName), "+1"+effectivePrefix+"%", sinceSec, sinceID, limit)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -172,7 +182,7 @@ func BlocklistDelta(ctx context.Context, db *sql.DB, sinceSec int64, sinceID uin
 	// number surfaces once as its spoof "label", never as a duplicate
 	// "unblock". (The base set's statuses -- blocked, overridden_block,
 	// suspected -- remain genuinely disjoint from the removal set.)
-	removalRows, err := queryBlocklistRows(ctx, db, blocklistRemovalQuery, sinceSec, sinceID, limit)
+	removalRows, err := queryBlocklistRows(ctx, db, withServingTable(blocklistRemovalQuery, servingTableName), sinceSec, sinceID, limit)
 	if err != nil {
 		return nil, 0, 0, err
 	}
