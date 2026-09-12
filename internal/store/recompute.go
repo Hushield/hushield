@@ -131,5 +131,12 @@ func RecomputeAll(ctx context.Context, db *sql.DB, now time.Time) (numbers int, 
 		return numbers, 0, err
 	}
 
+	// Publish both passes' results as one atomic snapshot. Until this runs,
+	// readers keep serving the previous snapshot, so the long rewrite above is
+	// invisible to them.
+	if err := SwapBlocklistServing(ctx, db); err != nil {
+		return numbers, devices, err
+	}
+
 	return numbers, devices, nil
 }

@@ -47,10 +47,13 @@ final class UITestLookup: NumberLookup {
 /// Completes instantly and never fails, unless `-uitest-syncfail` was passed
 /// at launch, in which case it always throws (see `UITestSupport.syncShouldFail`).
 final class UITestSyncing: Syncing {
-    func sync() async throws {
+    func sync(onProgress: (@Sendable (SyncProgress) -> Void)?) async throws {
         if UITestSupport.syncShouldFail {
             throw UITestSyncFailure()
         }
+        // Emit one finished-looking update so a UI test can assert the progress
+        // view appears and reads 100%, without needing a real paged sync.
+        onProgress?(SyncProgress(applied: 12, total: 12))
     }
 }
 
