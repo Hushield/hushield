@@ -66,7 +66,7 @@ const blocklistPrefixLength = 6
 // a full table scan plus a filesort (measured: 0.771s per 500-row page against
 // 732k rows, ~1465 pages for a full sync). Here FROM_UNIXTIME is applied to the
 // PARAMETER, evaluated once, leaving updated_at bare so the range optimizer can
-// seek idx_phone_numbers_updated_at_id (migration 0007) and walk in order.
+// seek idx_blocklist_serving_updated_at_id (migration 0008) and walk in order.
 //
 // FROM_UNIXTIME(0) is '1970-01-01 00:00:00', not NULL, so the (0, 0) full
 // snapshot cursor compares correctly rather than yielding NULL and returning
@@ -78,12 +78,12 @@ const blocklistPrefixLength = 6
 // seeding stamps huge numbers of rows with identical updated_at values (732k
 // rows across 3 distinct timestamps after the FTC/FCC import), so
 // phone_number_id carries essentially the whole tiebreak.
-const keysetPredicate = `(phone_numbers.updated_at, phone_numbers.phone_number_id) > (FROM_UNIXTIME(?), ?)`
+const keysetPredicate = `(blocklist_serving.updated_at, blocklist_serving.phone_number_id) > (FROM_UNIXTIME(?), ?)`
 
-const blocklistBaseQuery = `SELECT phone_numbers.phone_number_id, phone_numbers.number, phone_numbers.status, phone_numbers.updated_at, UNIX_TIMESTAMP(phone_numbers.updated_at) FROM phone_numbers
-WHERE phone_numbers.status IN ('blocked','overridden_block','suspected')
+const blocklistBaseQuery = `SELECT blocklist_serving.phone_number_id, blocklist_serving.number, blocklist_serving.status, blocklist_serving.updated_at, UNIX_TIMESTAMP(blocklist_serving.updated_at) FROM blocklist_serving
+WHERE blocklist_serving.status IN ('blocked','overridden_block','suspected')
   AND ` + keysetPredicate + `
-ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?`
+ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC LIMIT ?`
 
 // blocklistSpoofQuery finds sparse-signal numbers that spoof the caller's own
 // NPA-NXX prefix. Rationale: the spoof-adjusted score
@@ -92,12 +92,12 @@ ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?
 // deserves to be surfaced as a "label" entry even though the number's stored
 // status is still "unknown" (the cached status/score are computed without
 // knowledge of the querying caller's prefix).
-const blocklistSpoofQuery = `SELECT phone_numbers.phone_number_id, phone_numbers.number, phone_numbers.status, phone_numbers.updated_at, UNIX_TIMESTAMP(phone_numbers.updated_at) FROM phone_numbers
-WHERE phone_numbers.number LIKE ?
-  AND phone_numbers.status = 'unknown'
-  AND phone_numbers.cached_score > 0
+const blocklistSpoofQuery = `SELECT blocklist_serving.phone_number_id, blocklist_serving.number, blocklist_serving.status, blocklist_serving.updated_at, UNIX_TIMESTAMP(blocklist_serving.updated_at) FROM blocklist_serving
+WHERE blocklist_serving.number LIKE ?
+  AND blocklist_serving.status = 'unknown'
+  AND blocklist_serving.cached_score > 0
   AND ` + keysetPredicate + `
-ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?`
+ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC LIMIT ?`
 
 // blocklistRemovalQuery finds numbers that were once blockable
 // (was_blockable = 1, the sticky flag RecomputeNumber sets) and have since
@@ -107,12 +107,19 @@ ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?
 // leaves the blockable set would simply vanish from future deltas, leaving
 // an incremental client with no way to learn it should un-block it. Always
 // run, independent of prefix -- a removal is not a neighbor-spoof concept.
-const blocklistRemovalQuery = `SELECT phone_numbers.phone_number_id, phone_numbers.number, phone_numbers.status, phone_numbers.updated_at, UNIX_TIMESTAMP(phone_numbers.updated_at) FROM phone_numbers
-WHERE phone_numbers.was_blockable = 1
-  AND phone_numbers.status IN ('unknown','allowlisted')
+const blocklistRemovalQuery = `SELECT blocklist_serving.phone_number_id, blocklist_serving.number, blocklist_serving.status, blocklist_serving.updated_at, UNIX_TIMESTAMP(blocklist_serving.updated_at) FROM blocklist_serving
+WHERE blocklist_serving.was_blockable = 1
+  AND blocklist_serving.status IN ('unknown','allowlisted')
   AND ` + keysetPredicate + `
-ORDER BY phone_numbers.updated_at ASC, phone_numbers.phone_number_id ASC LIMIT ?`
+ORDER BY blocklist_serving.updated_at ASC, blocklist_serving.phone_number_id ASC LIMIT ?`
 
+// Reads come from blocklist_serving, the swapped read model (migration 0008),
+// NOT from phone_numbers. The decay pass rewrites derived state for every
+// number and took 58m52s at 732k numbers; serving from a copy that is replaced
+// by an atomic RENAME means a reader sees one complete snapshot or the other,
+// never an hour-long partial rewrite. phone_numbers remains the source of
+// truth, so no write is lost -- see store.SwapBlocklistServing.
+//
 // BlocklistDelta returns the numbers a device should block or label that
 // changed since the compound cursor (sinceSec, sinceID) -- (0, 0) for a full
 // snapshot -- optionally widened by prefix (the caller's own 6-digit
