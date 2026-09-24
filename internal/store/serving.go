@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 )
 
 // servingColumns is the derived read model the blocklist delta serves. It is
@@ -81,13 +83,17 @@ func ActiveServingTable(ctx context.Context, q Execer) (string, error) {
 //
 // phone_numbers remains the source of truth and is never switched away from --
 // only this derived projection is -- so a community report, attestation or
-// admin override landing mid-rebuild cannot be lost.
+// admin override landing mid-rebuild cannot be lost: rebuildStandbySlot's
+// SELECT snapshots phone_numbers at the start of a rebuild that takes 58m52s
+// at 732k rows, and anything committed to phone_numbers in that window would
+// be silently absent from the standby it just built. catchUpAndActivate
+// closes that window by re-reading whatever changed since, right before the
+// slot goes live, rather than waiting for the next rebuild up to 6h later.
 //
-// The switch is a single-row UPDATE of blocklist_serving_slot. It holds no DDL
-// lock, so readers are never queued behind it: a request either resolves the
-// pointer before the update and serves the whole previous snapshot, or after
-// and serves the whole new one. Never a torn mixture, which matters because
-// the rebuild rewrites derived state for every number and took 58m52s at 732k.
+// The switch itself is a single-row UPDATE of blocklist_serving_slot. It
+// holds no DDL lock, so readers are never queued behind it: a request either
+// resolves the pointer before the update and serves the whole previous
+// snapshot, or after and serves the whole new one. Never a torn mixture.
 func SwapBlocklistServing(ctx context.Context, db *sql.DB) error {
 	active, err := ActiveServingSlot(ctx, db)
 	if err != nil {
@@ -102,19 +108,75 @@ func SwapBlocklistServing(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	rebuildStart, err := rebuildStandbySlot(ctx, db, standbyTable)
+	if err != nil {
+		return err
+	}
+
+	return catchUpAndActivate(ctx, db, standby, standbyTable, rebuildStart)
+}
+
+// rebuildStandbySlot truncates and repopulates standbyTable from
+// phone_numbers, and returns the instant the rebuild's SELECT started -- the
+// cutoff catchUpAndActivate needs to find anything committed after that
+// snapshot was taken.
+func rebuildStandbySlot(ctx context.Context, db *sql.DB, standbyTable string) (time.Time, error) {
+	// Truncated to whole seconds because phone_numbers.updated_at is (see
+	// RecomputeNumber); a sub-second rebuildStart would make an
+	// updated_at >= rebuildStart comparison miss a row rounded down to the
+	// second before it.
+	rebuildStart := time.Now().UTC().Truncate(time.Second)
+
 	if _, err := db.ExecContext(ctx, `TRUNCATE TABLE `+standbyTable); err != nil {
-		return fmt.Errorf("store: truncating standby slot %s: %w", standby, err)
+		return time.Time{}, fmt.Errorf("store: truncating standby slot: %w", err)
 	}
 
 	insert := `INSERT INTO ` + standbyTable + ` (` + servingColumns + `)
 SELECT ` + servingColumns + ` FROM phone_numbers`
 	if _, err := db.ExecContext(ctx, insert); err != nil {
-		return fmt.Errorf("store: populating standby slot %s: %w", standby, err)
+		return time.Time{}, fmt.Errorf("store: populating standby slot: %w", err)
 	}
 
-	// Count while the rebuild is still fresh in the buffer pool, and publish it
-	// in the same UPDATE that moves the pointer, so the count a reader sees
-	// always describes the slot it is being pointed at.
+	return rebuildStart, nil
+}
+
+// catchUpAndActivate re-applies any phone_numbers row committed at or after
+// rebuildStart into standbyTable, then counts, publishes, and activates it.
+//
+// A one-second margin is subtracted from rebuildStart before comparing: MySQL
+// rounds updated_at's ON UPDATE CURRENT_TIMESTAMP to the nearest second, so a
+// commit a few hundred milliseconds before rebuildStart's truncated instant
+// can still round up to it. Re-copying a few extra unaffected rows is
+// harmless; missing a raced one is what this function exists to prevent.
+func catchUpAndActivate(ctx context.Context, db *sql.DB, standby, standbyTable string, rebuildStart time.Time) error {
+	cutoff := rebuildStart.Add(-1 * time.Second)
+
+	var caughtUp int64
+	countCatchUp := `SELECT COUNT(*) FROM phone_numbers WHERE updated_at >= ?`
+	if err := db.QueryRowContext(ctx, countCatchUp, cutoff).Scan(&caughtUp); err != nil {
+		return fmt.Errorf("store: counting catch-up rows for slot %s: %w", standby, err)
+	}
+	if caughtUp > 0 {
+		// The visible trace for a lost-update race: if this only ever prints
+		// 0, the race this closes has never fired between two rebuilds.
+		log.Printf("store: swap catch-up: %d row(s) changed during the standby rebuild, re-applying to slot %s", caughtUp, standby)
+
+		catchUp := `INSERT INTO ` + standbyTable + ` (` + servingColumns + `)
+SELECT ` + servingColumns + ` FROM phone_numbers WHERE updated_at >= ?
+ON DUPLICATE KEY UPDATE
+	number = VALUES(number),
+	cached_score = VALUES(cached_score),
+	status = VALUES(status),
+	was_blockable = VALUES(was_blockable),
+	updated_at = VALUES(updated_at)`
+		if _, err := db.ExecContext(ctx, catchUp, cutoff); err != nil {
+			return fmt.Errorf("store: applying catch-up rows to slot %s: %w", standby, err)
+		}
+	}
+
+	// Count after catch-up, not before: a raced report can change which
+	// statuses are servable, and the published denominator must describe the
+	// slot as it is about to go live, not as the bulk SELECT left it.
 	var servable int64
 	countQuery := `SELECT COUNT(*) FROM ` + standbyTable + ` WHERE status IN ` + servableStatuses
 	if err := db.QueryRowContext(ctx, countQuery).Scan(&servable); err != nil {

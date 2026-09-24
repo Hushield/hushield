@@ -206,6 +206,66 @@ func TestServingTable_rejectsUnknownSlot(t *testing.T) {
 	}
 }
 
+// A report landing on the active slot while the standby rebuild is still
+// running would otherwise vanish for up to 6 hours: the rebuild's SELECT
+// already snapshotted phone_numbers before the report committed, so the
+// standby it produces does not have it, and the pointer flip then makes that
+// stale snapshot the new truth. The catch-up pass closes this by re-reading
+// anything phone_numbers says changed since the rebuild started.
+func TestSwapBlocklistServing_catchesUpAReportThatLandsDuringTheRebuild(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	active, err := ActiveServingSlot(ctx, sqlDB)
+	if err != nil {
+		t.Fatalf("ActiveServingSlot: %v", err)
+	}
+	standby, err := standbySlot(active)
+	if err != nil {
+		t.Fatalf("standbySlot: %v", err)
+	}
+	standbyTable, err := servingTable(standby)
+	if err != nil {
+		t.Fatalf("servingTable: %v", err)
+	}
+
+	rebuildStart, err := rebuildStandbySlot(ctx, sqlDB, standbyTable)
+	if err != nil {
+		t.Fatalf("rebuildStandbySlot: %v", err)
+	}
+
+	// Simulate a report committing after the rebuild's snapshot was taken --
+	// this is what RecomputeNumberServing does on the request path, patching
+	// phone_numbers and the ACTIVE slot, never the standby being rebuilt.
+	number := "+14155559861"
+	id, err := UpsertPhoneNumber(ctx, sqlDB, number, now)
+	if err != nil {
+		t.Fatalf("UpsertPhoneNumber: %v", err)
+	}
+	for _, suffix := range []string{"a", "b", "c"} {
+		deviceID := insertDevice(t, sqlDB, "race-"+suffix, 1.0)
+		if _, err := UpsertReport(ctx, sqlDB, deviceID, id, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
+			t.Fatalf("UpsertReport: %v", err)
+		}
+	}
+	if _, err := RecomputeNumberServing(ctx, sqlDB, id, now); err != nil {
+		t.Fatalf("RecomputeNumberServing: %v", err)
+	}
+
+	if err := catchUpAndActivate(ctx, sqlDB, standby, standbyTable, rebuildStart); err != nil {
+		t.Fatalf("catchUpAndActivate: %v", err)
+	}
+
+	entries, _, _, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 100)
+	if err != nil {
+		t.Fatalf("BlocklistDelta: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Number != number || entries[0].Action != "block" {
+		t.Fatalf("the report that landed during the rebuild did not survive the swap; got %+v", entries)
+	}
+}
+
 // The progress denominator a client divides by. It must count only what the
 // delta actually serves, or the bar describes something other than what is
 // arriving.
