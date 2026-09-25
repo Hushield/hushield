@@ -167,7 +167,9 @@ func TestPlayIntegrityVerifier_VerifyAttestation_nonceMismatch(t *testing.T) {
 	}}
 	v := NewPlayIntegrityVerifier("com.hushield.android", decoder)
 
-	_, _, err := v.VerifyAttestation(t.Context(), "unused-keyid", androidAttestationEnvelope(t, "bad-token", pubDER), []byte("server-challenge-bytes"))
+	pubDERHash := sha256.Sum256(pubDER)
+	keyID := base64.StdEncoding.EncodeToString(pubDERHash[:])
+	_, _, err := v.VerifyAttestation(t.Context(), keyID, androidAttestationEnvelope(t, "bad-token", pubDER), []byte("server-challenge-bytes"))
 	if err == nil {
 		t.Fatal("VerifyAttestation accepted a token whose nonce does not bind to the submitted public key")
 	}
@@ -189,7 +191,9 @@ func TestPlayIntegrityVerifier_VerifyAttestation_wrongPackageName(t *testing.T) 
 	}}
 	v := NewPlayIntegrityVerifier("com.hushield.android", decoder)
 
-	_, _, err := v.VerifyAttestation(t.Context(), "unused-keyid", androidAttestationEnvelope(t, "impostor-token", pubDER), challenge)
+	pubDERHash := sha256.Sum256(pubDER)
+	keyID := base64.StdEncoding.EncodeToString(pubDERHash[:])
+	_, _, err := v.VerifyAttestation(t.Context(), keyID, androidAttestationEnvelope(t, "impostor-token", pubDER), challenge)
 	if err == nil {
 		t.Fatal("VerifyAttestation accepted a token issued for a different package name")
 	}
@@ -211,7 +215,9 @@ func TestPlayIntegrityVerifier_VerifyAttestation_weakIntegrityVerdict(t *testing
 	}}
 	v := NewPlayIntegrityVerifier("com.hushield.android", decoder)
 
-	_, _, err := v.VerifyAttestation(t.Context(), "unused-keyid", androidAttestationEnvelope(t, "rooted-device-token", pubDER), challenge)
+	pubDERHash := sha256.Sum256(pubDER)
+	keyID := base64.StdEncoding.EncodeToString(pubDERHash[:])
+	_, _, err := v.VerifyAttestation(t.Context(), keyID, androidAttestationEnvelope(t, "rooted-device-token", pubDER), challenge)
 	if err == nil {
 		t.Fatal("VerifyAttestation accepted a token with no MEETS_*_INTEGRITY verdict")
 	}
@@ -224,7 +230,9 @@ func TestPlayIntegrityVerifier_VerifyAttestation_decoderError(t *testing.T) {
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	pubDER, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
 
-	_, _, err := v.VerifyAttestation(t.Context(), "unused-keyid", androidAttestationEnvelope(t, "expired-token", pubDER), []byte("challenge"))
+	pubDERHash := sha256.Sum256(pubDER)
+	keyID := base64.StdEncoding.EncodeToString(pubDERHash[:])
+	_, _, err := v.VerifyAttestation(t.Context(), keyID, androidAttestationEnvelope(t, "expired-token", pubDER), []byte("challenge"))
 	if err == nil {
 		t.Fatal("VerifyAttestation swallowed a decoder error")
 	}
