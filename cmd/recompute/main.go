@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -126,11 +127,24 @@ func runCycle(ctx context.Context, sqlDB *sql.DB, cfg config.Config, notify bool
 	// which makes NewNotifier fatal) can never fail a recompute that already
 	// succeeded. When -notify is off we simply skip pushing.
 	if notify {
-		notifier, realAPNs, err := newNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
+		apnsNotifier, realAPNs, err := newNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
 		if err != nil {
 			return fmt.Errorf("building push notifier: %w", err)
 		}
 		if realAPNs {
+			// TODO(android): fcmAccessToken is a placeholder. A real deployment
+			// needs a short-lived OAuth2 access token minted from a
+			// service-account credential scoped to
+			// https://www.googleapis.com/auth/firebase.messaging, refreshed on
+			// a schedule (tokens are valid ~1h) -- the same underlying
+			// Google-credentials problem as the Play Integrity decoder's
+			// TODO in internal/attest/playintegrity.go, solved once there,
+			// not twice here.
+			fcmAccessToken := ""
+			notifier := &push.PlatformNotifier{
+				APNs: apnsNotifier,
+				FCM:  push.NewFCMNotifier(http.DefaultClient, cfg.FCMProjectID, fcmAccessToken),
+			}
 			targets, err := store.ListPushTargets(ctx, sqlDB)
 			if err != nil {
 				return fmt.Errorf("listing push targets: %w", err)

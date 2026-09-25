@@ -58,6 +58,12 @@ type Config struct {
 	// APNSTopic is the app bundle id sent as the apns-topic header
 	// (APNS_TOPIC).
 	APNSTopic string
+
+	// FCMProjectID is the Firebase project id used to build the FCM v1 send
+	// endpoint (FCM_PROJECT_ID). Unlike the APNs group, this is not gated on
+	// ATTEST_MODE and has no validation of its own -- an empty value simply
+	// means Android silent push is not configured.
+	FCMProjectID string
 }
 
 const (
@@ -165,6 +171,7 @@ func Load() (Config, error) {
 		APNSKeyID:                    getEnv("APNS_KEY_ID", ""),
 		APNSTeamID:                   getEnv("APNS_TEAM_ID", ""),
 		APNSTopic:                    getEnv("APNS_TOPIC", ""),
+		FCMProjectID:                 getEnv("FCM_PROJECT_ID", ""),
 	}
 
 	// Reject unknown modes before any mode-specific branch, so a typo can never
