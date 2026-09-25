@@ -91,17 +91,49 @@ func TestHealthz_ReusesRequestID(t *testing.T) {
 	}
 }
 
-func TestBuildVerifier_MockByDefault(t *testing.T) {
-	v := buildVerifier(config.Config{})
-	if _, ok := v.(*attest.MockVerifier); !ok {
-		t.Errorf("verifier = %T, want *attest.MockVerifier for default config", v)
+func TestBuildVerifiers_MockMode(t *testing.T) {
+	// config.Load defaults ATTEST_MODE to "mock"; buildVerifiers is exercised
+	// here with that mode set explicitly, matching what a real config always
+	// carries (Load never leaves AttestMode "").
+	verifiers := buildVerifiers(config.Config{AttestMode: "mock"})
+	if _, ok := verifiers["apple"].(*attest.MockVerifier); !ok {
+		t.Errorf("verifiers[apple] = %T, want *attest.MockVerifier for ATTEST_MODE=mock", verifiers["apple"])
+	}
+	if _, ok := verifiers["android"].(*attest.MockVerifier); !ok {
+		t.Errorf("verifiers[android] = %T, want *attest.MockVerifier for ATTEST_MODE=mock", verifiers["android"])
 	}
 }
 
-func TestBuildVerifier_AppleMode(t *testing.T) {
-	v := buildVerifier(config.Config{AttestMode: "apple", AppID: "TEAMID.com.example.app"})
-	if _, ok := v.(*attest.AppleVerifier); !ok {
-		t.Errorf("verifier = %T, want *attest.AppleVerifier when ATTEST_MODE=apple", v)
+func TestBuildVerifiers_AppleMode(t *testing.T) {
+	verifiers := buildVerifiers(config.Config{AttestMode: "apple", AppID: "TEAMID.com.example.app"})
+	if _, ok := verifiers["apple"].(*attest.AppleVerifier); !ok {
+		t.Errorf("verifiers[apple] = %T, want *attest.AppleVerifier when ATTEST_MODE=apple", verifiers["apple"])
+	}
+	// A platform this deployment did not enable must be ABSENT from the map
+	// entirely, not backed by a permissive mock -- see buildVerifiers' doc
+	// comment. This is the fail-closed property the whole task depends on.
+	if _, ok := verifiers["android"]; ok {
+		t.Errorf("verifiers[android] = %v, want no entry at all when ATTEST_MODE=apple", verifiers["android"])
+	}
+}
+
+func TestBuildVerifiers_AndroidMode(t *testing.T) {
+	verifiers := buildVerifiers(config.Config{AttestMode: "android", AndroidPackageName: "com.hushield.android"})
+	if _, ok := verifiers["android"].(*attest.PlayIntegrityVerifier); !ok {
+		t.Errorf("verifiers[android] = %T, want *attest.PlayIntegrityVerifier when ATTEST_MODE=android", verifiers["android"])
+	}
+	if _, ok := verifiers["apple"]; ok {
+		t.Errorf("verifiers[apple] = %v, want no entry at all when ATTEST_MODE=android", verifiers["apple"])
+	}
+}
+
+func TestBuildVerifiers_BothMode(t *testing.T) {
+	verifiers := buildVerifiers(config.Config{AttestMode: "both", AppID: "TEAMID.com.example.app", AndroidPackageName: "com.hushield.android"})
+	if _, ok := verifiers["apple"].(*attest.AppleVerifier); !ok {
+		t.Errorf("verifiers[apple] = %T, want *attest.AppleVerifier when ATTEST_MODE=both", verifiers["apple"])
+	}
+	if _, ok := verifiers["android"].(*attest.PlayIntegrityVerifier); !ok {
+		t.Errorf("verifiers[android] = %T, want *attest.PlayIntegrityVerifier when ATTEST_MODE=both", verifiers["android"])
 	}
 }
 

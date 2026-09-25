@@ -51,6 +51,16 @@ func run(ctx context.Context, ready chan<- string) error {
 		log.Printf("WARNING: DEVICE_TOKEN_SECRET is unset; using an insecure dev default. Set DEVICE_TOKEN_SECRET in production.")
 	}
 
+	// googlePlayIntegrityDecoder.Decode is not yet implemented (see its TODO
+	// in internal/attest/playintegrity.go): every Android attestation will
+	// fail with a generic "attestation verification failed" 401 until it is.
+	// Say so at startup rather than leaving an operator to debug what looks
+	// like an auth problem.
+	if cfg.AttestMode == "android" || cfg.AttestMode == "both" {
+		log.Printf("WARNING: ATTEST_MODE=%s but Play Integrity token verification is not yet implemented "+
+			"(googlePlayIntegrityDecoder.Decode is a stub); every Android attestation will fail until it is completed.", cfg.AttestMode)
+	}
+
 	// The memory challenge store is process-local. That is correct for a single
 	// instance and silently wrong behind a load balancer: a device fetches its
 	// challenge from instance A, submits the attestation to instance B, and B has

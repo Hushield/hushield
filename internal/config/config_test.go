@@ -454,6 +454,55 @@ func TestLoad_APNSFullyUnsetIsAllowed(t *testing.T) {
 	}
 }
 
+func TestLoad_attestModeAndroid_requiresPackageNameAndCredentials(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "android")
+	t.Setenv("ANDROID_PACKAGE_NAME", "")
+	t.Setenv("PLAY_INTEGRITY_CREDENTIALS_PATH", "")
+	t.Setenv("DEVICE_TOKEN_SECRET", strongSecret)
+	t.Setenv("ADMIN_TOKEN", strongAdminToken)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load succeeded with ATTEST_MODE=android but no ANDROID_PACKAGE_NAME/PLAY_INTEGRITY_CREDENTIALS_PATH")
+	}
+}
+
+func TestLoad_attestModeAndroid_valid(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "android")
+	t.Setenv("ANDROID_PACKAGE_NAME", "com.hushield.android")
+	t.Setenv("PLAY_INTEGRITY_CREDENTIALS_PATH", "/tmp/creds.json")
+	t.Setenv("DEVICE_TOKEN_SECRET", strongSecret)
+	t.Setenv("ADMIN_TOKEN", strongAdminToken)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AttestMode != "android" {
+		t.Errorf("AttestMode = %q, want %q", cfg.AttestMode, "android")
+	}
+}
+
+func TestLoad_attestModeAndroid_stillRequiresDeviceTokenSecret(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "android")
+	t.Setenv("ANDROID_PACKAGE_NAME", "com.hushield.android")
+	t.Setenv("PLAY_INTEGRITY_CREDENTIALS_PATH", "/tmp/creds.json")
+	t.Setenv("DEVICE_TOKEN_SECRET", "")
+	t.Setenv("ADMIN_TOKEN", strongAdminToken)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load succeeded with ATTEST_MODE=android and no DEVICE_TOKEN_SECRET -- production secret checks must not be apple-only")
+	}
+}
+
+func TestLoad_attestModeBoth_requiresBothApplePlatformsConfigured(t *testing.T) {
+	t.Setenv("ATTEST_MODE", "both")
+	t.Setenv("APP_ID", "")
+	t.Setenv("ANDROID_PACKAGE_NAME", "com.hushield.android")
+	t.Setenv("PLAY_INTEGRITY_CREDENTIALS_PATH", "/tmp/creds.json")
+	t.Setenv("DEVICE_TOKEN_SECRET", strongSecret)
+	t.Setenv("ADMIN_TOKEN", strongAdminToken)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load succeeded with ATTEST_MODE=both but no APP_ID")
+	}
+}
+
 func TestLoad_EnvOverrides(t *testing.T) {
 	t.Setenv("DB_DSN", "user:pass@tcp(db:3306)/custom?parseTime=true")
 	t.Setenv("ADDR", ":9090")
