@@ -41,4 +41,9 @@ dependencies {
     testImplementation("io.mockk:mockk:1.13.13")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core:1.6.1")
+    // Android's org.json classes are stubbed to throw in plain (non-Robolectric)
+    // unit tests -- this real implementation shadows that stub on the test
+    // classpath so APIClientTest/EnrollmentServiceTest can use JSONObject
+    // without needing Robolectric (see task-6-report.md).
+    testImplementation("org.json:json:20240303")
 }
