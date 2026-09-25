@@ -3,7 +3,10 @@ package attest
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -61,6 +64,29 @@ func (v *PlayIntegrityVerifier) VerifyAttestation(ctx context.Context, keyID str
 	pubDER, err := base64.StdEncoding.DecodeString(envelope.PublicKeyDER)
 	if err != nil || len(pubDER) == 0 {
 		return nil, nil, fmt.Errorf("%w: public_key_der must be valid non-empty base64", ErrAttestationInvalid)
+	}
+
+	// Bind keyID to the submitted public key, mirroring AppleVerifier's own
+	// keyIDMatches check. Without this, a client could claim an arbitrary
+	// key_id -- including one already enrolled by another device -- for a
+	// key it doesn't actually own, and UpsertDevicePlatform would silently
+	// overwrite that key_id's stored public key on "re-attestation".
+	wantKeyID := sha256.Sum256(pubDER)
+	if keyID != base64.StdEncoding.EncodeToString(wantKeyID[:]) {
+		return nil, nil, fmt.Errorf("%w: keyID is not bound to the submitted public key", ErrAttestationInvalid)
+	}
+
+	// Confirm the submitted key is actually a usable ECDSA P-256 key, mirroring
+	// how apple.go validates its own credCert key type. Without this, a device
+	// could enroll with a key that can never successfully sign an assertion --
+	// discovered only much later at assert time rather than at enrollment.
+	pub, err := x509.ParsePKIXPublicKey(pubDER)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: parse public_key_der: %v", ErrAttestationInvalid, err)
+	}
+	ecdsaPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok || ecdsaPub.Curve != elliptic.P256() {
+		return nil, nil, fmt.Errorf("%w: public_key_der must be an ECDSA P-256 key", ErrAttestationInvalid)
 	}
 
 	verdict, err := v.decoder.Decode(ctx, envelope.IntegrityToken)

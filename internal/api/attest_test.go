@@ -485,6 +485,61 @@ func TestHandleVerify_unknownPlatformRejected(t *testing.T) {
 	}
 }
 
+// TestHandleVerify_rejectsPlatformChangeOnReattestation guards against an
+// attacker enrolling a NEW key under a victim's existing key_id and having
+// UpsertDevicePlatform silently keep the old platform while accepting new
+// key material verified under a different verifier's rules than what was
+// checked at that device's original enrollment.
+func TestHandleVerify_rejectsPlatformChangeOnReattestation(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	chStore := attest.NewMemoryChallengeStore()
+	h := twoPlatformHandler(chStore, database)
+
+	keyID := "platform-switch-key"
+
+	// 1. Enroll as "apple".
+	ch1, err := chStore.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	rec := doVerify(t, h, verifyRequest{
+		KeyID:       keyID,
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(ch1),
+		Platform:    "apple",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial apple enrollment status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+
+	// 2. Attempt to re-enroll the same key_id as "android" -- must be rejected.
+	ch2, err := chStore.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	rec = doVerify(t, h, verifyRequest{
+		KeyID:       keyID,
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(ch2),
+		Platform:    "android",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("platform-switch re-attestation status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+
+	// 3. The device's stored platform and public key must remain unchanged.
+	_, pubDER, _, platform, err := store.GetDeviceByKeyID(reqCtx(), database, keyID)
+	if err != nil {
+		t.Fatalf("GetDeviceByKeyID: %v", err)
+	}
+	if platform != "apple" {
+		t.Errorf("stored platform = %q, want %q (must not change on rejected re-attestation)", platform, "apple")
+	}
+	if string(pubDER) != "mock-apple-pubkey" {
+		t.Errorf("stored public key = %q, want %q (must not be overwritten by the rejected android re-attestation)", pubDER, "mock-apple-pubkey")
+	}
+}
+
 // TestHandleVerify_androidPlatformRejectedWhenAttestModeIsAppleOnly guards the
 // fail-closed property buildVerifiers depends on: a deployment that only
 // enabled ATTEST_MODE=apple must not expose any fallback that accepts a

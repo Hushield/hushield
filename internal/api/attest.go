@@ -142,6 +142,27 @@ func (h *attestHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If a device already exists for this key_id, a re-attestation must keep
+	// the platform it originally enrolled under. Without this check, an
+	// attacker who knows or guesses a victim's key_id could re-enroll new key
+	// material under a different platform's verifier -- whose rules were
+	// never checked against the original enrollment -- and
+	// UpsertDevicePlatform would silently keep the device's old platform
+	// while accepting the new key, handing the attacker control of that
+	// device_id.
+	if _, _, _, existingPlatform, err := store.GetDeviceByKeyID(r.Context(), h.db, body.KeyID); err == nil {
+		if existingPlatform != platform {
+			WriteError(w, http.StatusBadRequest, requestID,
+				APIError{Field: "platform", Message: "platform does not match this device's enrolled platform", Code: "bad_request"})
+			return
+		}
+	} else if !errors.Is(err, store.ErrDeviceNotFound) {
+		logInternalError(requestID, "lookup device", err)
+		WriteError(w, http.StatusInternalServerError, requestID,
+			APIError{Message: "failed to look up device", Code: "internal_error"})
+		return
+	}
+
 	deviceID, err := store.UpsertDevicePlatform(r.Context(), h.db, body.KeyID, pubDER, receipt, platform, now)
 	if err != nil {
 		logInternalError(requestID, "persist device", err)
