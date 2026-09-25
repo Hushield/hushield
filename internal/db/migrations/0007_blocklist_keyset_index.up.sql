@@ -1,0 +1,26 @@
+-- Index the blocklist delta's keyset order so paging is a seek, not a scan.
+--
+-- BlocklistDelta pages by (updated_at, phone_number_id). Before this index --
+-- and before the matching predicate change in internal/store/blocklist.go --
+-- every page was a full table scan plus a filesort:
+--
+--   type: ALL   key: NULL   rows: 715574   Extra: Using where; Using filesort
+--
+-- measured at 0.771s per 500-row page against 732k rows. A full sync is ~1465
+-- pages, so roughly a billion row reads and ~19 minutes of pure DB time.
+--
+-- The key is (updated_at, phone_number_id) rather than extending the existing
+-- (status, updated_at) index with phone_number_id. The base query filters
+-- status IN ('blocked','overridden_block','suspected'), so a status-leading
+-- index produces three separate ranges whose union is NOT in global
+-- (updated_at, phone_number_id) order -- MySQL would still have to sort to
+-- satisfy ORDER BY, which is the cost being removed here. Leading with the
+-- ordering columns instead gives a range seek to the cursor followed by an
+-- in-order walk, with status applied as a residual filter.
+--
+-- That trade is right while nearly every row is blockable. If the table ever
+-- becomes mostly non-blockable -- seeded scores decay, so most rows can end up
+-- 'unknown' -- the residual filter would have to skip many rows to fill a
+-- page, and this choice should be revisited against a composite index.
+CREATE INDEX idx_phone_numbers_updated_at_id
+    ON phone_numbers (updated_at, phone_number_id);

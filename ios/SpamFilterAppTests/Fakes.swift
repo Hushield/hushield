@@ -48,10 +48,17 @@ final class FakeSyncer: Syncing {
     /// Optional hook run inside `sync()` so a test can mutate the fake status
     /// reader to simulate the sync having changed local state.
     var onSync: (() -> Void)?
+    /// Progress updates the fake emits, in order, before succeeding or
+    /// throwing. Lets a test drive the Status screen's progress card without a
+    /// real paged sync.
+    var progressUpdates: [SyncProgress] = []
 
-    func sync() async throws {
+    func sync(onProgress: (@Sendable (SyncProgress) -> Void)?) async throws {
         syncCallCount += 1
         onSync?()
+        for update in progressUpdates {
+            onProgress?(update)
+        }
         if let error { throw error }
     }
 }

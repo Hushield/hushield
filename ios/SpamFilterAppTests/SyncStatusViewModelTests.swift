@@ -111,8 +111,68 @@ private final class DelayingSyncer: Syncing {
 
     func resume() { gate.signal() }
 
-    func sync() async throws {
+    func sync(onProgress: (@Sendable (SyncProgress) -> Void)?) async throws {
         started.signal()
         await gate.wait()
+    }
+}
+
+extension SyncStatusViewModelTests {
+    /// The Status screen reads `progress` to draw its bar, so the view model
+    /// must publish what the syncer reports.
+    @MainActor
+    func test_syncNow_publishesProgressFromTheSyncer() async {
+        let syncer = FakeSyncer()
+        syncer.progressUpdates = [
+            SyncProgress(applied: 1000, total: 5000),
+            SyncProgress(applied: 3500, total: 5000),
+        ]
+        let status = FakeStatusReader()
+        let vm = SyncStatusViewModel(syncer: syncer, status: status)
+
+        await vm.syncNow()
+
+        // The handler hands updates over through a MainActor task, so let those
+        // land before asserting.
+        await Task.yield()
+
+        XCTAssertEqual(vm.progress, SyncProgress(applied: 3500, total: 5000))
+        XCTAssertEqual(vm.progressPercentText, "70%")
+        XCTAssertEqual(vm.progressDetailText, "3,500 of 5,000 numbers")
+    }
+
+    /// A new run must not show the previous run's bar before its first page
+    /// lands.
+    @MainActor
+    func test_syncNow_clearsPriorProgressOnEntry() async {
+        let syncer = FakeSyncer()
+        syncer.progressUpdates = [SyncProgress(applied: 42, total: 100)]
+        let vm = SyncStatusViewModel(syncer: syncer, status: FakeStatusReader())
+
+        await vm.syncNow()
+        await Task.yield()
+        XCTAssertNotNil(vm.progress)
+
+        // Second run reports nothing; the stale value must not survive entry.
+        syncer.progressUpdates = []
+        await vm.syncNow()
+        await Task.yield()
+
+        XCTAssertNil(vm.progress, "a new sync must not inherit the previous run's progress")
+    }
+
+    /// Without a server total there is no fraction, so the screen falls back to
+    /// an indeterminate bar and a bare count.
+    @MainActor
+    func test_syncNow_withoutTotal_hasNoPercentButStillShowsACount() async {
+        let syncer = FakeSyncer()
+        syncer.progressUpdates = [SyncProgress(applied: 1234, total: 0)]
+        let vm = SyncStatusViewModel(syncer: syncer, status: FakeStatusReader())
+
+        await vm.syncNow()
+        await Task.yield()
+
+        XCTAssertNil(vm.progressPercentText)
+        XCTAssertEqual(vm.progressDetailText, "1,234 numbers")
     }
 }
