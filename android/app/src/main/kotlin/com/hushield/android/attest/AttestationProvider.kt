@@ -37,7 +37,8 @@ interface IntegrityTokenSource {
 
 class RealAttestationProvider(
     private val keyManager: KeystoreKeyManager,
-    private val integrityDecoder: IntegrityTokenSource
+    private val integrityDecoder: IntegrityTokenSource,
+    private val androidAssertion: AndroidAssertion
 ) : AttestationProvider {
 
     // Guards every operation below: all three target the SAME fixed
@@ -72,11 +73,16 @@ class RealAttestationProvider(
         // catches a caller passing a keyId from before the key was rotated
         // by a later generateKeyId() call.
         currentKeyMatching(keyId)
-        // Full wire-format correctness (counter, JSON shape) is Task 4's
-        // job (AndroidAssertion.kt) -- this delegates signing to the
-        // Keystore key directly so assert() has a working seam now; Task 4
-        // is expected to refactor this call site once it lands.
-        keyManager.sign(DEVICE_KEY_ALIAS, clientDataHash)
+        try {
+            androidAssertion.sign(DEVICE_KEY_ALIAS, keyId, clientDataHash)
+        } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
+            // The Keystore entry named by DEVICE_KEY_ALIAS is no longer
+            // usable -- the Android analog of DCError.invalidKey (see
+            // AttestationProviderException.KeyUnusable's doc comment).
+            // EnrollmentService.validToken() catches this, clears the stored
+            // identity, and enrolls once with a genuinely new key.
+            throw AttestationProviderException.KeyUnusable
+        }
     }
 
     private fun currentKeyMatching(keyId: String): PublicKey {

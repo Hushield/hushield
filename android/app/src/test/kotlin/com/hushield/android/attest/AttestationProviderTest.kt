@@ -74,11 +74,17 @@ class AttestationProviderTest {
         return KeystoreKeyManager(backing.keyStore, backing.generation)
     }
 
+    private fun newAssertion(keyManager: KeystoreKeyManager): AndroidAssertion {
+        val counterStore = mockk<CounterStore>(relaxed = true)
+        every { counterStore.next(any()) } returns 1
+        return AndroidAssertion(keyManager, counterStore)
+    }
+
     @Test
     fun `generateKeyId derives the key ID from sha256 of the PKIX-DER public key`() = runBlocking {
         val keyManager = newManager()
         val decoder = mockk<IntegrityTokenSource>()
-        val provider = RealAttestationProvider(keyManager, decoder)
+        val provider = RealAttestationProvider(keyManager, decoder, newAssertion(keyManager))
 
         val keyId = provider.generateKeyId()
         // The provider must have stored the key under an alias it can look
@@ -98,7 +104,7 @@ class AttestationProviderTest {
     fun `generateKeyId called again rotates the device key, invalidating the previous keyId`() {
         val keyManager = newManager()
         val decoder = mockk<IntegrityTokenSource>()
-        val provider = RealAttestationProvider(keyManager, decoder)
+        val provider = RealAttestationProvider(keyManager, decoder, newAssertion(keyManager))
 
         val firstKeyId = runBlocking { provider.generateKeyId() }
         val secondKeyId = runBlocking { provider.generateKeyId() }
@@ -113,7 +119,7 @@ class AttestationProviderTest {
     fun `two concurrent generateKeyId callers don't corrupt the fixed alias's key state`() = runBlocking {
         val keyManager = newManager()
         val decoder = mockk<IntegrityTokenSource>()
-        val provider = RealAttestationProvider(keyManager, decoder)
+        val provider = RealAttestationProvider(keyManager, decoder, newAssertion(keyManager))
 
         // Two callers racing to enroll when no key exists yet both target
         // KeystoreKeyManager.generateKey(DEVICE_KEY_ALIAS), which physically
@@ -152,7 +158,7 @@ class AttestationProviderTest {
     fun `attest builds a nonce from sha256(challenge concat pubkey) and returns the integrity token wrapped in the envelope`() = runBlocking {
         val keyManager = newManager()
         val decoder = mockk<IntegrityTokenSource>()
-        val provider = RealAttestationProvider(keyManager, decoder)
+        val provider = RealAttestationProvider(keyManager, decoder, newAssertion(keyManager))
 
         val keyId = provider.generateKeyId()
         val pubKey = keyManager.publicKey(RealAttestationProvider.DEVICE_KEY_ALIAS)!!
@@ -171,23 +177,46 @@ class AttestationProviderTest {
     }
 
     @Test
-    fun `assert produces the same androidAssertion wire format signed by the Keystore key`() = runBlocking {
+    fun `assert produces the AndroidAssertion wire format signed by the fixed Keystore alias, counter keyed by keyId`() = runBlocking {
         val keyManager = newManager()
         val decoder = mockk<IntegrityTokenSource>()
-        val provider = RealAttestationProvider(keyManager, decoder)
+        val counterStore = mockk<CounterStore>()
+        val assertion = AndroidAssertion(keyManager, counterStore)
+        val provider = RealAttestationProvider(keyManager, decoder, assertion)
 
         val keyId = provider.generateKeyId()
+        every { counterStore.next(keyId) } returns 5
         val clientDataHash = "client-data-hash".toByteArray()
 
-        val assertion = provider.assert(keyId, clientDataHash)
-        // Full wire-format correctness (counter, JSON shape) is Task 4's
-        // job -- this test only proves `assert` delegates signing to the
-        // Keystore key named by keyId, which Task 4's tests build on.
-        assertTrue(assertion.isNotEmpty())
+        val result = provider.assert(keyId, clientDataHash)
+        val json = JSONObject(String(result))
+        assertEquals(5, json.getInt("counter"))
+
+        val counterBytes = java.nio.ByteBuffer.allocate(4).putInt(5).array()
+        val expectedMessage = MessageDigest.getInstance("SHA-256").digest(clientDataHash + counterBytes)
+        val signatureBytes = Base64.decode(json.getString("signature"), Base64.NO_WRAP)
 
         val verifier = java.security.Signature.getInstance("SHA256withECDSA")
         verifier.initVerify(keyManager.publicKey(RealAttestationProvider.DEVICE_KEY_ALIAS))
-        verifier.update(clientDataHash)
-        assertTrue(verifier.verify(assertion))
+        verifier.update(expectedMessage)
+        assertTrue(verifier.verify(signatureBytes))
+
+        io.mockk.verify(exactly = 1) { counterStore.next(keyId) }
+    }
+
+    @Test
+    fun `assert translates KeyPermanentlyInvalidatedException into AttestationProviderException KeyUnusable`(): Unit = runBlocking {
+        val keyManager = newManager()
+        val decoder = mockk<IntegrityTokenSource>()
+        val androidAssertion = mockk<AndroidAssertion>()
+        every { androidAssertion.sign(any(), any(), any()) } throws
+            android.security.keystore.KeyPermanentlyInvalidatedException()
+
+        val provider = RealAttestationProvider(keyManager, decoder, androidAssertion)
+        val keyId = provider.generateKeyId()
+
+        assertThrows(AttestationProviderException.KeyUnusable::class.java) {
+            runBlocking { provider.assert(keyId, "client-data-hash".toByteArray()) }
+        }
     }
 }
