@@ -1,6 +1,6 @@
 package com.hushield.android.attest
 
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -45,7 +45,11 @@ class KeystoreKeyManagerTest {
         val manager = KeystoreKeyManager()
         val first = manager.generateKey("test-alias-2")
         val second = manager.generateKey("test-alias-2")
-        assertNotEquals(first, second)
+        // Compare encoded key material, not PublicKey#equals() -- many JCE
+        // key implementations don't override equals() for content, so
+        // comparing the objects directly could pass on reference identity
+        // alone regardless of whether the key material actually differs.
+        assertFalse(first.encoded.contentEquals(second.encoded))
     }
 
     @Ignore("Robolectric has no AndroidKeyStore Provider; see class doc / task-2-report.md")

@@ -2,10 +2,37 @@ package com.hushield.android.attest
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.security.keystore.StrongBoxUnavailableException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PublicKey
 import java.security.Signature
+import java.security.spec.ECGenParameterSpec
+
+/**
+ * Seam over the real StrongBox/TEE key generation call, so the
+ * StrongBox-then-TEE fallback logic in [KeystoreKeyManager.generateKey] can
+ * be unit-tested with a fake instead of requiring a real AndroidKeyStore
+ * Provider (unavailable under Robolectric; see KeystoreKeyManagerTest).
+ */
+interface KeyPairGeneration {
+    fun generateKeyPair(alias: String, strongBoxBacked: Boolean): PublicKey
+}
+
+private class RealKeyPairGeneration : KeyPairGeneration {
+    override fun generateKeyPair(alias: String, strongBoxBacked: Boolean): PublicKey {
+        val purposes = KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+        val spec = KeyGenParameterSpec.Builder(alias, purposes)
+            .setDigests(KeyProperties.DIGEST_SHA256)
+            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+            .setIsStrongBoxBacked(strongBoxBacked)
+            .build()
+
+        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
+        generator.initialize(spec)
+        return generator.generateKeyPair().public
+    }
+}
 
 /**
  * Manages this app's Android Keystore-backed EC key pairs -- the Keystore
@@ -17,26 +44,22 @@ import java.security.Signature
  * hardware-isolated from the app process, just not from a separate chip.
  */
 class KeystoreKeyManager(
-    private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) },
+    private val generation: KeyPairGeneration = RealKeyPairGeneration()
 ) {
 
     fun generateKey(alias: String): PublicKey {
-        deleteKey(alias)
-
-        val purposes = KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-        val baseSpec = KeyGenParameterSpec.Builder(alias, purposes)
-            .setDigests(KeyProperties.DIGEST_SHA256)
-            .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
-
-        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        try {
-            generator.initialize(baseSpec.setIsStrongBoxBacked(true).build())
-            return generator.generateKeyPair().public
-        } catch (e: Exception) {
+        // Generating a new key pair under an alias that already has an entry
+        // replaces that entry -- so the old key is only ever removed once a
+        // new one exists at the same alias. If both the StrongBox and TEE
+        // attempts below fail, this method throws and the previous key (if
+        // any) at `alias` is untouched: no unconditional delete-before-generate.
+        return try {
+            generation.generateKeyPair(alias, strongBoxBacked = true)
+        } catch (e: StrongBoxUnavailableException) {
             // StrongBox unavailable on this device/API level -- fall back to
             // a TEE-backed key rather than failing enrollment outright.
-            generator.initialize(baseSpec.setIsStrongBoxBacked(false).build())
-            return generator.generateKeyPair().public
+            generation.generateKeyPair(alias, strongBoxBacked = false)
         }
     }
 
