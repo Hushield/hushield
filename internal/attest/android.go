@@ -12,16 +12,26 @@ import (
 
 // PlayIntegrityVerifier verifies Android devices attested via the Play
 // Integrity API. It implements Verifier, fails closed on any deviation, and
-// mirrors AppleVerifier's structure: VerifyAttestation (added in a later
-// change) establishes trust in a device-generated key once; VerifyAssertion
-// (here) checks that key's signature on every later request.
+// mirrors AppleVerifier's structure: VerifyAttestation (see playintegrity.go)
+// establishes trust in a device-generated key once; VerifyAssertion (here)
+// checks that key's signature on every later request.
 //
 // Unlike App Attest, Android has no OS-level per-request signed-assertion
 // format, so this file defines a minimal one both this server and the
 // Android client agree on: a JSON envelope carrying a strictly-increasing
 // counter and an ECDSA-P256 signature over
 // SHA256(clientDataHash || big-endian-uint32(counter)).
-type PlayIntegrityVerifier struct{}
+type PlayIntegrityVerifier struct {
+	packageName string
+	decoder     integrityTokenDecoder
+}
+
+// NewPlayIntegrityVerifier constructs a PlayIntegrityVerifier for the given
+// Android package name, decoding tokens via decoder (the real
+// googlePlayIntegrityDecoder in production, a fake in tests).
+func NewPlayIntegrityVerifier(packageName string, decoder integrityTokenDecoder) *PlayIntegrityVerifier {
+	return &PlayIntegrityVerifier{packageName: packageName, decoder: decoder}
+}
 
 // androidAssertion is the wire format signTestAssertion in this file's tests
 // constructs and the real Android client must produce identically.
