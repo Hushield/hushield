@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,18 @@ func withNotifier(t *testing.T, n push.Notifier, real bool, err error) {
 	t.Cleanup(func() { newNotifier = prev })
 }
 
+// withFCMNotifier swaps the package-level FCM factory for the duration of a
+// test, so a test can inject a spy in place of the real push.NewFCMNotifier
+// (which otherwise makes live HTTP calls to fcm.googleapis.com).
+func withFCMNotifier(t *testing.T, n push.Notifier) {
+	t.Helper()
+	prev := newFCMNotifier
+	newFCMNotifier = func(_ *http.Client, _, _ string) push.Notifier {
+		return n
+	}
+	t.Cleanup(func() { newFCMNotifier = prev })
+}
+
 // seedDeviceWithPushToken creates a device and registers an APNs token for it,
 // so ListPushTargets has something to return. Reuses insertRunCycleDevice from
 // runcycle_test.go rather than duplicating the insert.
@@ -37,6 +50,17 @@ func seedDeviceWithPushToken(t *testing.T, sqlDB *sql.DB, keyID, token string) u
 	t.Helper()
 	deviceID := insertRunCycleDevice(t, sqlDB, keyID, 1.0)
 	if err := store.UpsertPushToken(context.Background(), sqlDB, deviceID, token, "production", "apns", time.Now()); err != nil {
+		t.Fatalf("UpsertPushToken(%s): %v", keyID, err)
+	}
+	return deviceID
+}
+
+// seedDeviceWithFCMToken mirrors seedDeviceWithPushToken for an Android
+// device registered on the "fcm" platform.
+func seedDeviceWithFCMToken(t *testing.T, sqlDB *sql.DB, keyID, token string) uint64 {
+	t.Helper()
+	deviceID := insertRunCycleDevice(t, sqlDB, keyID, 1.0)
+	if err := store.UpsertPushToken(context.Background(), sqlDB, deviceID, token, "production", "fcm", time.Now()); err != nil {
 		t.Fatalf("UpsertPushToken(%s): %v", keyID, err)
 	}
 	return deviceID
@@ -142,9 +166,10 @@ func TestRunCycle_MixedBatchAttemptsEveryTarget(t *testing.T) {
 	}
 }
 
-// realAPNs=false is the production reality today (no .p8 configured): the
-// notifier is built, reports itself as a no-op, and the broadcast is skipped
-// entirely -- no targets are even queried.
+// realAPNs=false AND no FCM_PROJECT_ID configured means NEITHER platform has
+// real credentials: the notifier is built, reports itself as a no-op, and the
+// broadcast is skipped entirely -- no targets are even queried. This is the
+// case where skipping everything is still correct.
 func TestRunCycle_NoRealAPNsSkipsBroadcastEntirely(t *testing.T) {
 	sqlDB := dbtest.SetupDB(t)
 	seedDeviceWithPushToken(t, sqlDB, "noop-1", "token-noop")
@@ -152,11 +177,46 @@ func TestRunCycle_NoRealAPNsSkipsBroadcastEntirely(t *testing.T) {
 	mock := &push.MockNotifier{}
 	withNotifier(t, mock, false, nil) // realAPNs = false
 
+	// cfg has no FCMProjectID either, so realFCM is also false.
 	if err := runCycle(context.Background(), sqlDB, config.Config{AttestMode: "mock"}, true); err != nil {
 		t.Fatalf("runCycle: %v", err)
 	}
 	if n := len(mock.Calls()); n != 0 {
-		t.Errorf("made %d sends, want 0 -- realAPNs=false must skip the broadcast", n)
+		t.Errorf("made %d sends, want 0 -- with neither platform configured, the broadcast must be skipped", n)
+	}
+}
+
+// This is the regression test for the bug: APNs is NOT configured
+// (realAPNs=false) but FCM IS (FCMProjectID set). Before the fix, the whole
+// broadcast block was gated on realAPNs alone, so an Android device would
+// silently get nothing even though FCM credentials exist. After the fix, the
+// gate is realAPNs || realFCM, and the FCM-platform device must be pushed via
+// the (injected, HTTP-free) FCM notifier while the untouched APNs field is a
+// clean no-op.
+func TestRunCycle_FCMConfiguredWithoutAPNsStillBroadcastsToFCMDevices(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	seedDeviceWithFCMToken(t, sqlDB, "android-1", "fcm-token-aaa")
+
+	apnsMock := &push.MockNotifier{}
+	withNotifier(t, apnsMock, false, nil) // realAPNs = false
+
+	fcmMock := &push.MockNotifier{}
+	withFCMNotifier(t, fcmMock)
+
+	cfg := config.Config{AttestMode: "mock", FCMProjectID: "hushield-prod"}
+	if err := runCycle(context.Background(), sqlDB, cfg, true); err != nil {
+		t.Fatalf("runCycle: %v", err)
+	}
+
+	fcmCalls := fcmMock.Calls()
+	if len(fcmCalls) != 1 {
+		t.Fatalf("fcm notifier got %d calls, want 1 -- an FCM device must be pushed even though APNs is unconfigured", len(fcmCalls))
+	}
+	if fcmCalls[0].Token != "fcm-token-aaa" {
+		t.Errorf("fcm notifier called with token %q, want fcm-token-aaa", fcmCalls[0].Token)
+	}
+	if n := len(apnsMock.Calls()); n != 0 {
+		t.Errorf("apns notifier (unconfigured) got %d calls, want 0", n)
 	}
 }
 
