@@ -6,6 +6,18 @@ import DeviceCheck
 /// an error (should not happen in practice, but the API allows it).
 public enum AttestationProviderError: Error, Equatable {
     case unknown
+    /// The key ID handed to `attest`/`assert` no longer names a key this
+    /// install can use, so the stored App Attest identity is unrecoverable
+    /// and the caller must enrol again with a freshly generated key.
+    ///
+    /// Translated from `DCError.invalidKey`, which Apple documents for three
+    /// situations: attesting an already-attested key, asserting an unattested
+    /// key, and the App Attest service rejecting the key outright. On device
+    /// the practical trigger is the install's App Attest identity changing --
+    /// a reinstall, or a build switching the `appattest-environment`
+    /// entitlement -- which destroys the Secure Enclave key while the
+    /// Keychain keeps the key ID string that named it.
+    case keyUnusable
 }
 
 /// Abstraction over the App Attest key lifecycle, so `EnrollmentService` can
@@ -31,6 +43,19 @@ public protocol AttestationProvider {
 public final class DeviceAttestationProvider: AttestationProvider {
     private let service: DCAppAttestService
 
+    /// Translates `DCError.invalidKey` into `AttestationProviderError.keyUnusable`
+    /// so `EnrollmentService` can recognise a dead key without importing
+    /// DeviceCheck. Every other error -- including `serverUnavailable`, which
+    /// is transient and must NOT discard a working identity -- passes through
+    /// unchanged.
+    public static func mapDeviceCheckError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        guard nsError.domain == DCErrorDomain, nsError.code == DCError.invalidKey.rawValue else {
+            return error
+        }
+        return AttestationProviderError.keyUnusable
+    }
+
     public init(service: DCAppAttestService = .shared) {
         self.service = service
     }
@@ -41,7 +66,7 @@ public final class DeviceAttestationProvider: AttestationProvider {
                 if let keyID {
                     continuation.resume(returning: keyID)
                 } else {
-                    continuation.resume(throwing: error ?? AttestationProviderError.unknown)
+                    continuation.resume(throwing: error.map(Self.mapDeviceCheckError) ?? AttestationProviderError.unknown)
                 }
             }
         }
@@ -53,7 +78,7 @@ public final class DeviceAttestationProvider: AttestationProvider {
                 if let data {
                     continuation.resume(returning: data)
                 } else {
-                    continuation.resume(throwing: error ?? AttestationProviderError.unknown)
+                    continuation.resume(throwing: error.map(Self.mapDeviceCheckError) ?? AttestationProviderError.unknown)
                 }
             }
         }
@@ -65,7 +90,7 @@ public final class DeviceAttestationProvider: AttestationProvider {
                 if let data {
                     continuation.resume(returning: data)
                 } else {
-                    continuation.resume(throwing: error ?? AttestationProviderError.unknown)
+                    continuation.resume(throwing: error.map(Self.mapDeviceCheckError) ?? AttestationProviderError.unknown)
                 }
             }
         }
