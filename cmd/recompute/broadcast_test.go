@@ -36,7 +36,7 @@ func withNotifier(t *testing.T, n push.Notifier, real bool, err error) {
 func seedDeviceWithPushToken(t *testing.T, sqlDB *sql.DB, keyID, token string) uint64 {
 	t.Helper()
 	deviceID := insertRunCycleDevice(t, sqlDB, keyID, 1.0)
-	if err := store.UpsertPushToken(context.Background(), sqlDB, deviceID, token, "production", time.Now()); err != nil {
+	if err := store.UpsertPushToken(context.Background(), sqlDB, deviceID, token, "production", "apns", time.Now()); err != nil {
 		t.Fatalf("UpsertPushToken(%s): %v", keyID, err)
 	}
 	return deviceID

@@ -71,7 +71,7 @@ func (h *pushTokenHandler) handleRegister(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := store.UpsertPushToken(r.Context(), h.db, deviceID, body.PushToken, body.Environment, h.clock()); err != nil {
+	if err := store.UpsertPushToken(r.Context(), h.db, deviceID, body.PushToken, body.Environment, "apns", h.clock()); err != nil {
 		logInternalError(requestID, "register push token", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
 			APIError{Message: "failed to register push token", Code: "internal_error"})

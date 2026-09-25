@@ -66,7 +66,7 @@ func TestStoreFunctions_DBErrorsPropagate(t *testing.T) {
 	})
 
 	t.Run("GetDeviceByKeyID", func(t *testing.T) {
-		if _, _, _, err := GetDeviceByKeyID(ctx, sqlDB, "some-key"); err == nil {
+		if _, _, _, _, err := GetDeviceByKeyID(ctx, sqlDB, "some-key"); err == nil {
 			t.Error("want error on closed db, got nil")
 		} else if err == ErrDeviceNotFound {
 			t.Error("want a real DB error, not ErrDeviceNotFound")
@@ -86,7 +86,7 @@ func TestStoreFunctions_DBErrorsPropagate(t *testing.T) {
 	})
 
 	t.Run("UpsertPushToken", func(t *testing.T) {
-		if err := UpsertPushToken(ctx, sqlDB, 1, "token", "production", now); err == nil {
+		if err := UpsertPushToken(ctx, sqlDB, 1, "token", "production", "apns", now); err == nil {
 			t.Error("want error on closed db, got nil")
 		}
 	})

@@ -198,7 +198,7 @@ func (h *attestHandler) handleAssert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The device must have attested a key before it can assert with it.
-	deviceID, pubDER, signCount, err := store.GetDeviceByKeyID(r.Context(), h.db, body.KeyID)
+	deviceID, pubDER, signCount, _, err := store.GetDeviceByKeyID(r.Context(), h.db, body.KeyID)
 	if err != nil {
 		if errors.Is(err, store.ErrDeviceNotFound) {
 			WriteError(w, http.StatusUnauthorized, requestID,
