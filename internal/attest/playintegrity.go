@@ -155,9 +155,9 @@ func NewDefaultIntegrityDecoder(packageName string) integrityTokenDecoder {
 // playintegrity.googleapis.com/v1/{packageName}:decodeIntegrityToken,
 // authenticated via OAuth2 using a service-account credential scoped to
 // https://www.googleapis.com/auth/playintegrity, and unmarshal the response
-// into an integrityVerdict. Until this is implemented, those two modes fail
-// closed at startup or at first use (this error), rather than silently
-// accepting bad attestations.
+// into an integrityVerdict. Until this is implemented, those two modes log a
+// startup warning (see cmd/server/main.go) and then fail closed at first use
+// (this error), rather than silently accepting bad attestations.
 func (d *googlePlayIntegrityDecoder) Decode(ctx context.Context, integrityToken string) (*integrityVerdict, error) {
 	return nil, fmt.Errorf("attest: googlePlayIntegrityDecoder.Decode not yet implemented -- see TODO")
 }

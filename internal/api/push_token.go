@@ -71,6 +71,12 @@ func (h *pushTokenHandler) handleRegister(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// TODO(android): this hardcodes "apns" as the push platform -- there is no
+	// Android client yet to register an FCM token. Once one exists, this
+	// endpoint needs to accept and validate a platform-appropriate token
+	// format: FCM tokens aren't hex-encoded and have no sandbox/production
+	// environment concept the way APNs tokens do, so the validation above
+	// (hex, "sandbox"/"production") cannot simply be reused as-is for Android.
 	if err := store.UpsertPushToken(r.Context(), h.db, deviceID, body.PushToken, body.Environment, "apns", h.clock()); err != nil {
 		logInternalError(requestID, "register push token", err)
 		WriteError(w, http.StatusInternalServerError, requestID,

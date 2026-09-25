@@ -39,6 +39,11 @@ func NewFCMNotifier(httpClient *http.Client, projectID, accessToken string) *FCM
 // token. A 2xx response returns nil; any other status returns an error
 // including the FCM status code and response body.
 func (n *FCMNotifier) SendSilentRefresh(ctx context.Context, target store.PushTarget) error {
+	// TODO(android): the request body shape below (message.data,
+	// message.android.priority) is a reasonable approximation of Firebase's
+	// HTTP v1 API, not verified against Firebase's current live API
+	// reference. Check it against the current docs before this is used for a
+	// real production send.
 	body, err := json.Marshal(map[string]any{
 		"message": map[string]any{
 			"token": target.Token,
