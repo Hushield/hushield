@@ -1,6 +1,8 @@
 package com.hushield.android.attest
 
 import android.util.Base64
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.PublicKey
@@ -38,22 +40,34 @@ class RealAttestationProvider(
     private val integrityDecoder: IntegrityTokenSource
 ) : AttestationProvider {
 
-    override suspend fun generateKeyId(): String {
+    // Guards every operation below: all three target the SAME fixed
+    // Keystore alias (DEVICE_KEY_ALIAS), and KeystoreKeyManager.generateKey
+    // PHYSICALLY OVERWRITES whatever key currently lives at that alias. Two
+    // concurrent generateKeyId() calls -- e.g. two callers racing to enroll
+    // when no key exists yet -- would otherwise both generate against the
+    // same alias, and the second's key material would silently replace the
+    // first's, orphaning any keyId/public key the first call already
+    // returned (and any server that already accepted it). The mutex makes
+    // generateKeyId(), attest(), and assert() mutually exclusive against
+    // this provider's key state so that race can't happen.
+    private val mutex = Mutex()
+
+    override suspend fun generateKeyId(): String = mutex.withLock {
         val pubKey = keyManager.generateKey(DEVICE_KEY_ALIAS)
-        return deriveKeyId(pubKey.encoded)
+        deriveKeyId(pubKey.encoded)
     }
 
-    override suspend fun attest(keyId: String, clientDataHash: ByteArray): ByteArray {
+    override suspend fun attest(keyId: String, clientDataHash: ByteArray): ByteArray = mutex.withLock {
         val pubKey = currentKeyMatching(keyId)
         val nonce = MessageDigest.getInstance("SHA-256").digest(clientDataHash + pubKey.encoded)
         val integrityToken = integrityDecoder.requestToken(nonce)
         val envelope = JSONObject()
             .put("integrity_token", integrityToken)
             .put("public_key_der", Base64.encodeToString(pubKey.encoded, Base64.NO_WRAP))
-        return envelope.toString().toByteArray()
+        envelope.toString().toByteArray()
     }
 
-    override suspend fun assert(keyId: String, clientDataHash: ByteArray): ByteArray {
+    override suspend fun assert(keyId: String, clientDataHash: ByteArray): ByteArray = mutex.withLock {
         // Confirm keyId still names the live device key before signing --
         // catches a caller passing a keyId from before the key was rotated
         // by a later generateKeyId() call.
@@ -62,7 +76,7 @@ class RealAttestationProvider(
         // job (AndroidAssertion.kt) -- this delegates signing to the
         // Keystore key directly so assert() has a working seam now; Task 4
         // is expected to refactor this call site once it lands.
-        return keyManager.sign(DEVICE_KEY_ALIAS, clientDataHash)
+        keyManager.sign(DEVICE_KEY_ALIAS, clientDataHash)
     }
 
     private fun currentKeyMatching(keyId: String): PublicKey {

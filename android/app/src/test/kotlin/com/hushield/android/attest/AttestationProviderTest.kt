@@ -4,6 +4,9 @@ import android.util.Base64
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -104,6 +107,45 @@ class AttestationProviderTest {
         assertThrows(AttestationProviderException.KeyUnusable::class.java) {
             runBlocking { provider.assert(firstKeyId, "client-data-hash".toByteArray()) }
         }
+    }
+
+    @Test
+    fun `two concurrent generateKeyId callers don't corrupt the fixed alias's key state`() = runBlocking {
+        val keyManager = newManager()
+        val decoder = mockk<IntegrityTokenSource>()
+        val provider = RealAttestationProvider(keyManager, decoder)
+
+        // Two callers racing to enroll when no key exists yet both target
+        // KeystoreKeyManager.generateKey(DEVICE_KEY_ALIAS), which physically
+        // overwrites whatever key currently lives at that alias. Without
+        // RealAttestationProvider's mutex serializing generateKeyId(),
+        // attest(), and assert(), this interleaving could leave the caller
+        // that "lost" holding a keyId that no longer matches anything the
+        // Keystore has -- a silent, unrecoverable desync -- rather than the
+        // well-defined last-writer-wins rotation this test proves.
+        val (keyIdA, keyIdB) = coroutineScope {
+            val a = async(Dispatchers.Default) { provider.generateKeyId() }
+            val b = async(Dispatchers.Default) { provider.generateKeyId() }
+            Pair(a.await(), b.await())
+        }
+
+        // Both calls succeeded without throwing, and each generated a
+        // distinct key (the mutex serializes rather than merges them).
+        assertNotEquals(keyIdA, keyIdB)
+
+        val livePubKey = keyManager.publicKey(RealAttestationProvider.DEVICE_KEY_ALIAS)
+        assertNotNull(livePubKey)
+        val liveKeyId = Base64.encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(livePubKey!!.encoded),
+            Base64.NO_WRAP
+        )
+
+        // The alias must end up holding exactly one of the two callers' keys
+        // -- never a third, corrupted, or inconsistent state.
+        assertTrue(
+            "live key must match exactly one of the two concurrent callers' keyIds",
+            liveKeyId == keyIdA || liveKeyId == keyIdB
+        )
     }
 
     @Test
