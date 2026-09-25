@@ -27,7 +27,7 @@ help:
 	@echo "  make test-go   Run the Go suite (go test ./... -race -cover)"
 	@echo "  make test-ios  Run the iOS suite (xcodegen + xcodebuild test) on an available simulator"
 	@echo "  make test      Run the full suite: test-go AND test-ios (the pre-deploy gate)"
-	@echo "  make build-linux-arm64  Cross-compile server+recompute for the arm64 deploy host"
+	@echo "  make build-linux-arm64  Cross-compile server+recompute+seed for the arm64 deploy host"
 	@echo "  make deploy-server      Backend-only release: gated on test-go only"
 	@echo "  make deploy    Full release: gated on 'test' (Go AND iOS), then scripts/deploy.sh"
 	@echo "  make hooks     Install .githooks/pre-push and set core.hooksPath"
@@ -66,15 +66,16 @@ test-ios:
 test: test-go test-ios
 	@echo "All suites passed (Go + iOS)."
 
-## build-linux-arm64: Cross-compile the server and recompute binaries for the
+## build-linux-arm64: Cross-compile the server, recompute and seed binaries for the
 ## deploy host. Static (CGO_ENABLED=0) so nothing needs installing on the box,
 ## and migrations are go:embed'ed so the binary is fully self-contained.
 build-linux-arm64:
 	@mkdir -p bin
 	CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=$(GOARCH_ARM) go build -trimpath -o bin/hushield-server ./cmd/server
 	CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=$(GOARCH_ARM) go build -trimpath -o bin/hushield-recompute ./cmd/recompute
+	CGO_ENABLED=0 GOOS=$(GOOS_LINUX) GOARCH=$(GOARCH_ARM) go build -trimpath -o bin/hushield-seed ./cmd/seed
 	@echo "--- verifying architecture (must say ARM aarch64) ---"
-	@file bin/hushield-server bin/hushield-recompute
+	@file bin/hushield-server bin/hushield-recompute bin/hushield-seed
 	@file bin/hushield-server | grep -q 'ARM aarch64' \
 		|| { echo "ERROR: bin/hushield-server is not ARM aarch64 -- it will not run on $(DEPLOY_HOST)." >&2; exit 1; }
 
