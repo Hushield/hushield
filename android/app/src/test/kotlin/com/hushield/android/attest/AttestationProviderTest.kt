@@ -192,13 +192,16 @@ class AttestationProviderTest {
         val json = JSONObject(String(result))
         assertEquals(5, json.getInt("counter"))
 
+        // Single-hash cross-check against Go's VerifyAssertion (see the
+        // matching comment in AndroidAssertionTest): verify against the RAW
+        // preimage and let SHA256withECDSA hash it once, not a pre-hashed digest.
         val counterBytes = java.nio.ByteBuffer.allocate(4).putInt(5).array()
-        val expectedMessage = MessageDigest.getInstance("SHA-256").digest(clientDataHash + counterBytes)
+        val rawPreimage = clientDataHash + counterBytes
         val signatureBytes = Base64.decode(json.getString("signature"), Base64.NO_WRAP)
 
         val verifier = java.security.Signature.getInstance("SHA256withECDSA")
         verifier.initVerify(keyManager.publicKey(RealAttestationProvider.DEVICE_KEY_ALIAS))
-        verifier.update(expectedMessage)
+        verifier.update(rawPreimage)
         assertTrue(verifier.verify(signatureBytes))
 
         io.mockk.verify(exactly = 1) { counterStore.next(keyId) }

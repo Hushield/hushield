@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import android.util.Base64
 import org.json.JSONObject
 import java.nio.ByteBuffer
-import java.security.MessageDigest
 
 interface CounterStore {
     /** Returns the next counter value for keyId, strictly greater than any value previously returned for it. */
@@ -55,8 +54,14 @@ class AndroidAssertion(
     fun sign(alias: String, keyId: String, clientDataHash: ByteArray): ByteArray {
         val counter = counterStore.next(keyId)
         val counterBytes = ByteBuffer.allocate(4).putInt(counter).array()
-        val message = MessageDigest.getInstance("SHA-256").digest(clientDataHash + counterBytes)
-        val signature = keyManager.sign(alias, message)
+        // Do NOT pre-hash here: KeystoreKeyManager.sign() uses
+        // "SHA256withECDSA", which hashes its input internally. Passing the
+        // raw preimage (clientDataHash || counterBytes) means the signature
+        // covers exactly SHA256(clientDataHash || counterBytes) once -- the
+        // single-hash convention the Go backend's VerifyAssertion expects
+        // (see internal/attest/android.go). Pre-hashing here would sign
+        // SHA256(SHA256(...)), which the Go side never asks for.
+        val signature = keyManager.sign(alias, clientDataHash + counterBytes)
 
         val json = JSONObject()
             .put("counter", counter)

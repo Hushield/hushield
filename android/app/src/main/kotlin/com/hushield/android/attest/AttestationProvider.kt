@@ -26,7 +26,24 @@ sealed class AttestationProviderException : Exception() {
  */
 interface AttestationProvider {
     suspend fun generateKeyId(): String
-    suspend fun attest(keyId: String, clientDataHash: ByteArray): ByteArray
+
+    /**
+     * `challenge` here is the RAW server challenge bytes (base64-decoded,
+     * NOT pre-hashed) -- the nonce this builds is
+     * SHA256(challenge || pubKey.encoded), matching the Go backend's
+     * VerifyAttestation (internal/api/attest.go's handleVerify passes the
+     * raw decoded challenge, never pre-hashed, into VerifyAttestation).
+     * Unlike [assert]'s `clientDataHash` parameter, this one is deliberately
+     * NOT a digest -- see EnrollmentService.enroll() for the call site.
+     */
+    suspend fun attest(keyId: String, challenge: ByteArray): ByteArray
+
+    /**
+     * `clientDataHash` here IS pre-hashed (SHA256(challenge)) -- matching
+     * the Go backend's handleAssert, which independently computes
+     * `sha256.Sum256(chBytes)` before calling VerifyAssertion. See
+     * EnrollmentService.refresh() for the call site.
+     */
     suspend fun assert(keyId: String, clientDataHash: ByteArray): ByteArray
 }
 
@@ -58,9 +75,9 @@ class RealAttestationProvider(
         deriveKeyId(pubKey.encoded)
     }
 
-    override suspend fun attest(keyId: String, clientDataHash: ByteArray): ByteArray = mutex.withLock {
+    override suspend fun attest(keyId: String, challenge: ByteArray): ByteArray = mutex.withLock {
         val pubKey = currentKeyMatching(keyId)
-        val nonce = MessageDigest.getInstance("SHA-256").digest(clientDataHash + pubKey.encoded)
+        val nonce = MessageDigest.getInstance("SHA-256").digest(challenge + pubKey.encoded)
         val integrityToken = integrityDecoder.requestToken(nonce)
         val envelope = JSONObject()
             .put("integrity_token", integrityToken)
@@ -77,8 +94,7 @@ class RealAttestationProvider(
             androidAssertion.sign(DEVICE_KEY_ALIAS, keyId, clientDataHash)
         } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
             // The Keystore entry named by DEVICE_KEY_ALIAS is no longer
-            // usable -- the Android analog of DCError.invalidKey (see
-            // AttestationProviderException.KeyUnusable's doc comment).
+            // usable -- the Android analog of DCError.invalidKey on iOS.
             // EnrollmentService.validToken() catches this, clears the stored
             // identity, and enrolls once with a genuinely new key.
             throw AttestationProviderException.KeyUnusable

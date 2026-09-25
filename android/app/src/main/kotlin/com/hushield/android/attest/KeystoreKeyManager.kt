@@ -67,15 +67,16 @@ class KeystoreKeyManager(
         return keyStore.getCertificate(alias)?.publicKey
     }
 
-    // TODO(android): once a future task adds biometric-gated
-    // re-authentication to this Keystore key (setUserAuthenticationRequired),
-    // sign()/publicKey() calls here need to catch the OS-level
-    // android.security.keystore.KeyPermanentlyInvalidatedException and
-    // translate it to AttestationProviderException.KeyUnusable too.
-    // KeyUnusable currently only covers the self-caused case (a caller
-    // passing a stale keyId after RealAttestationProvider rotated the key) --
-    // not this OS-level invalidation case, which is unreachable today since
-    // nothing sets setUserAuthenticationRequired anywhere in this codebase.
+    // TODO(android): Task 4 added a KeyPermanentlyInvalidatedException ->
+    // KeyUnusable translation one layer up, in
+    // RealAttestationProvider.assert() (wrapping AndroidAssertion.sign(),
+    // which calls sign() below) -- so the assert()/signing path IS covered.
+    // What's still unhandled is publicKey() here: if a future task adds
+    // biometric-gated re-authentication to this Keystore key
+    // (setUserAuthenticationRequired), a call to publicKey() on an
+    // invalidated key needs its own catch/translate, since nothing upstream
+    // of publicKey() does that today. Unreachable currently since nothing
+    // sets setUserAuthenticationRequired anywhere in this codebase.
     fun sign(alias: String, data: ByteArray): ByteArray {
         val privateKey = keyStore.getKey(alias, null) as java.security.PrivateKey
         val signature = Signature.getInstance("SHA256withECDSA")

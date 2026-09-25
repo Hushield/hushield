@@ -87,7 +87,17 @@ class AndroidAssertionTest {
     }
 
     @Test
-    fun `the signature verifies against sha256(clientDataHash concat big-endian counter)`() {
+    fun `the signature verifies against the RAW preimage clientDataHash concat big-endian counter, not a pre-hashed digest`() {
+        // This is the cross-check against Go's verification logic
+        // (internal/attest/android.go's VerifyAssertion): Go computes
+        // message := SHA256(clientDataHash || counterBytes) ONCE and calls
+        // ecdsa.VerifyASN1(pub, message, sig) -- ecdsa.VerifyASN1 does NOT
+        // hash its input, so `message` there IS the final digest. Java's
+        // "SHA256withECDSA" verifier, by contrast, hashes its input
+        // internally. So the Kotlin-side equivalent of Go's check is to feed
+        // Signature.verify the RAW preimage (clientDataHash + counterBytes)
+        // and let SHA256withECDSA do the one hash -- never pre-hash it here,
+        // or this test would pass while Go's verifier rejects the signature.
         val keyManager = newManager()
         val alias = "assertion-test-key-2"
         keyManager.generateKey(alias)
@@ -101,13 +111,21 @@ class AndroidAssertionTest {
         val json = JSONObject(String(result))
 
         val counterBytes = ByteBuffer.allocate(4).putInt(json.getInt("counter")).array()
-        val expectedMessage = MessageDigest.getInstance("SHA-256").digest(clientDataHash + counterBytes)
+        val rawPreimage = clientDataHash + counterBytes
         val signatureBytes = android.util.Base64.decode(json.getString("signature"), android.util.Base64.NO_WRAP)
 
         val verifier = Signature.getInstance("SHA256withECDSA")
         verifier.initVerify(keyManager.publicKey(alias))
-        verifier.update(expectedMessage)
+        verifier.update(rawPreimage)
         assertTrue(verifier.verify(signatureBytes))
+
+        // Negative check: a verifier fed the OLD double-hashed message must
+        // NOT validate. If this assertion fails, the bug has regressed.
+        val doubleHashedMessage = MessageDigest.getInstance("SHA-256").digest(rawPreimage)
+        val staleVerifier = Signature.getInstance("SHA256withECDSA")
+        staleVerifier.initVerify(keyManager.publicKey(alias))
+        staleVerifier.update(doubleHashedMessage)
+        assertTrue(!staleVerifier.verify(signatureBytes))
     }
 
     @Test

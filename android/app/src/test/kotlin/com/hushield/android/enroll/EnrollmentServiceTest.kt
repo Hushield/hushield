@@ -9,6 +9,10 @@ import com.hushield.android.store.TokenStore
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -69,5 +73,89 @@ class EnrollmentServiceTest {
             runBlocking { service.validToken() }
         }
         io.mockk.verify { tokenStore.clear() }
+    }
+
+    /** In-memory TokenStore, real enough to let a second racing caller
+     * observe what the first one actually saved -- unlike a mockk stub that
+     * would keep returning null/empty forever regardless of what "saves"
+     * happened, which would hide exactly the race this test exists to catch.
+     */
+    private class FakeTokenStore : TokenStore {
+        private var token: Pair<String, Instant>? = null
+        private var keyId: String? = null
+
+        override fun saveToken(token: String, expiresAt: Instant) {
+            this.token = token to expiresAt
+        }
+
+        override fun loadToken(): Pair<String, Instant>? = token
+        override fun saveKeyId(keyId: String) {
+            this.keyId = keyId
+        }
+
+        override fun loadKeyId(): String? = keyId
+        override fun clear() {
+            token = null
+            keyId = null
+        }
+    }
+
+    @Test
+    fun `two concurrent validToken calls on a fresh service single-flight instead of interleaving`() = runBlocking {
+        val apiClient = mockk<APIClient>()
+        val provider = mockk<AttestationProvider>()
+        val tokenStore = FakeTokenStore()
+
+        // Track concurrent entries into generateKeyId()/attest() so an
+        // interleaving would be caught even if the final stored state
+        // happened to look fine by luck.
+        val inFlight = java.util.concurrent.atomic.AtomicInteger(0)
+        val maxConcurrent = java.util.concurrent.atomic.AtomicInteger(0)
+        val generateKeyIdCalls = java.util.concurrent.atomic.AtomicInteger(0)
+        val attestCalls = java.util.concurrent.atomic.AtomicInteger(0)
+
+        suspend fun <T> trackConcurrency(block: suspend () -> T): T {
+            val current = inFlight.incrementAndGet()
+            maxConcurrent.updateAndGet { prev -> maxOf(prev, current) }
+            try {
+                kotlinx.coroutines.delay(20) // widen the race window
+                return block()
+            } finally {
+                inFlight.decrementAndGet()
+            }
+        }
+
+        coEvery { provider.generateKeyId() } coAnswers {
+            trackConcurrency {
+                generateKeyIdCalls.incrementAndGet()
+                "shared-key-id"
+            }
+        }
+        coEvery { apiClient.challenge() } returns ChallengeResponse("chal123", "2099-01-01T00:00:00Z")
+        coEvery { provider.attest("shared-key-id", any()) } coAnswers {
+            trackConcurrency {
+                attestCalls.incrementAndGet()
+                "attestation-bytes".toByteArray()
+            }
+        }
+        coEvery { apiClient.verify("shared-key-id", any(), "chal123") } returns
+            DeviceTokenResponse("tok", "2099-06-01T00:00:00Z")
+
+        val service = EnrollmentService(apiClient, provider, tokenStore)
+
+        val results = coroutineScope {
+            val a = async(Dispatchers.Default) { service.validToken() }
+            val b = async(Dispatchers.Default) { service.validToken() }
+            listOf(a, b).awaitAll()
+        }
+
+        // Never more than one caller inside generateKeyId()/attest() at once.
+        assertEquals(1, maxConcurrent.get())
+        // Exactly one full enrollment happened: the mutex made the second
+        // caller wait until the first had already saved a valid token, so
+        // it took the cached-token fast path instead of enrolling again.
+        assertEquals(1, generateKeyIdCalls.get())
+        assertEquals(1, attestCalls.get())
+        assertEquals(listOf("tok", "tok"), results)
     }
 }
