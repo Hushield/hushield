@@ -1,12 +1,12 @@
 package api
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -14,7 +14,6 @@ import (
 	"spamfilter/internal/attest"
 	"spamfilter/internal/store"
 	"spamfilter/internal/token"
-	"spamfilter/internal/trust"
 )
 
 // attestHandler serves the App Attest challenge/verify endpoints. It converts
@@ -22,7 +21,7 @@ import (
 type attestHandler struct {
 	db           *sql.DB
 	store        attest.ChallengeStore
-	verifier     attest.Verifier
+	verifiers    map[string]attest.Verifier
 	signer       *token.Signer
 	challengeTTL time.Duration
 	tokenTTL     time.Duration
@@ -64,6 +63,11 @@ type verifyRequest struct {
 	KeyID       string `json:"key_id"`
 	Attestation string `json:"attestation"`
 	Challenge   string `json:"challenge"`
+	// Platform selects which Verifier checks Attestation: "apple" or
+	// "android". Empty defaults to "apple" -- every iOS client shipped
+	// before this field existed never sends it, and must keep working
+	// identically.
+	Platform string `json:"platform"`
 }
 
 type verifyResponse struct {
@@ -100,6 +104,16 @@ func (h *attestHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 			APIError{Field: "key_id", Message: "key_id is reserved", Code: "bad_request"})
 		return
 	}
+	platform := body.Platform
+	if platform == "" {
+		platform = "apple"
+	}
+	verifier, ok := h.verifiers[platform]
+	if !ok {
+		WriteError(w, http.StatusBadRequest, requestID,
+			APIError{Field: "platform", Message: fmt.Sprintf("unknown platform %q", platform), Code: "bad_request"})
+		return
+	}
 	attBytes, err := base64.StdEncoding.DecodeString(body.Attestation)
 	if err != nil || len(attBytes) == 0 {
 		WriteError(w, http.StatusBadRequest, requestID,
@@ -121,14 +135,14 @@ func (h *attestHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify the attestation (fails closed).
-	pubDER, receipt, err := h.verifier.VerifyAttestation(r.Context(), body.KeyID, attBytes, chBytes)
+	pubDER, receipt, err := verifier.VerifyAttestation(r.Context(), body.KeyID, attBytes, chBytes)
 	if err != nil {
 		WriteError(w, http.StatusUnauthorized, requestID,
 			APIError{Message: "attestation verification failed", Code: "unauthorized"})
 		return
 	}
 
-	deviceID, err := upsertDevice(r.Context(), h.db, body.KeyID, pubDER, receipt, now)
+	deviceID, err := store.UpsertDevicePlatform(r.Context(), h.db, body.KeyID, pubDER, receipt, platform, now)
 	if err != nil {
 		logInternalError(requestID, "persist device", err)
 		WriteError(w, http.StatusInternalServerError, requestID,
@@ -198,7 +212,7 @@ func (h *attestHandler) handleAssert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The device must have attested a key before it can assert with it.
-	deviceID, pubDER, signCount, _, err := store.GetDeviceByKeyID(r.Context(), h.db, body.KeyID)
+	deviceID, pubDER, signCount, platform, err := store.GetDeviceByKeyID(r.Context(), h.db, body.KeyID)
 	if err != nil {
 		if errors.Is(err, store.ErrDeviceNotFound) {
 			WriteError(w, http.StatusUnauthorized, requestID,
@@ -211,9 +225,22 @@ func (h *attestHandler) handleAssert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	verifier, ok := h.verifiers[platform]
+	if !ok {
+		// A device's stored platform not matching any configured verifier
+		// means server config changed after this device enrolled (e.g. the
+		// "android" verifier was removed from ATTEST_MODE). Fail closed
+		// rather than silently picking a verifier the device never attested
+		// against.
+		logInternalError(requestID, "assert", fmt.Errorf("device %d has unconfigured platform %q", deviceID, platform))
+		WriteError(w, http.StatusInternalServerError, requestID,
+			APIError{Message: "device platform not available", Code: "internal_error"})
+		return
+	}
+
 	// Verify the assertion (fails closed, enforces strictly-increasing counter).
 	clientDataHash := sha256.Sum256(chBytes)
-	newCounter, err := h.verifier.VerifyAssertion(r.Context(), pubDER, asrtBytes, clientDataHash[:], signCount)
+	newCounter, err := verifier.VerifyAssertion(r.Context(), pubDER, asrtBytes, clientDataHash[:], signCount)
 	if err != nil {
 		WriteError(w, http.StatusUnauthorized, requestID,
 			APIError{Message: "assertion verification failed", Code: "unauthorized"})
@@ -232,30 +259,4 @@ func (h *attestHandler) handleAssert(w http.ResponseWriter, r *http.Request) {
 		DeviceToken: tok,
 		ExpiresAt:   now.Add(h.tokenTTL).UTC().Format(time.RFC3339),
 	}, requestID)
-}
-
-// upsertDevice inserts or updates the device row keyed by key_id and returns
-// its device_id. New rows get trust.TrustBase so enrolment matches what
-// trust.Compute returns before any reports or tenure accumulate; existing
-// rows keep their recomputed trust_weight (UPDATE clause leaves it alone).
-func upsertDevice(ctx context.Context, db *sql.DB, keyID string, publicKey, receipt []byte, now time.Time) (uint64, error) {
-	if db == nil {
-		return 0, errors.New("api: nil database handle")
-	}
-
-	const upsert = `INSERT INTO devices (key_id, public_key, receipt, last_seen_at, trust_weight)
-VALUES (?, ?, ?, ?, ?)
-ON DUPLICATE KEY UPDATE
-    public_key = VALUES(public_key),
-    receipt = VALUES(receipt),
-    last_seen_at = VALUES(last_seen_at)`
-	if _, err := db.ExecContext(ctx, upsert, keyID, publicKey, receipt, now.UTC(), trust.TrustBase); err != nil {
-		return 0, err
-	}
-
-	var deviceID uint64
-	if err := db.QueryRowContext(ctx, "SELECT device_id FROM devices WHERE key_id = ?", keyID).Scan(&deviceID); err != nil {
-		return 0, err
-	}
-	return deviceID, nil
 }

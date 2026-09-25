@@ -112,6 +112,17 @@ func newGooglePlayIntegrityDecoder(packageName string, httpClient *http.Client) 
 	return &googlePlayIntegrityDecoder{packageName: packageName, httpClient: httpClient}
 }
 
+// NewDefaultIntegrityDecoder is the exported seam callers outside this
+// package (namely internal/api's router, wiring up ATTEST_MODE=android/both)
+// use to obtain the production integrityTokenDecoder for NewPlayIntegrityVerifier,
+// since integrityTokenDecoder itself is unexported. It returns the same
+// googlePlayIntegrityDecoder newGooglePlayIntegrityDecoder builds -- whose
+// Decode is not yet implemented (see the TODO above) -- so ATTEST_MODE=android
+// or "both" fails closed at first use, not silently.
+func NewDefaultIntegrityDecoder(packageName string) integrityTokenDecoder {
+	return newGooglePlayIntegrityDecoder(packageName, nil)
+}
+
 // TODO(android): implement this against Google's current Play Integrity API
 // docs before ATTEST_MODE=android or ATTEST_MODE=both is used against real
 // devices. This must POST to

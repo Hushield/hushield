@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -15,6 +14,7 @@ import (
 	"spamfilter/internal/attest"
 	"spamfilter/internal/config"
 	"spamfilter/internal/dbtest"
+	"spamfilter/internal/store"
 	"spamfilter/internal/token"
 	"spamfilter/internal/trust"
 )
@@ -33,9 +33,12 @@ func decodeEnvelope(t *testing.T, body []byte) (success bool, data json.RawMessa
 
 func newTestHandler(store attest.ChallengeStore, verifier attest.Verifier, database *sql.DB) *attestHandler {
 	return &attestHandler{
-		db:           database,
-		store:        store,
-		verifier:     verifier,
+		db:    database,
+		store: store,
+		verifiers: map[string]attest.Verifier{
+			"apple":   verifier,
+			"android": verifier,
+		},
 		signer:       token.NewSigner([]byte("test-secret")),
 		challengeTTL: 5 * time.Minute,
 		tokenTTL:     time.Hour,
@@ -80,7 +83,7 @@ func TestAttestHandler_CustomClock(t *testing.T) {
 	fixed := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
 	h := &attestHandler{
 		store:        attest.NewMemoryChallengeStore(),
-		verifier:     attest.NewMockVerifier(nil, nil),
+		verifiers:    map[string]attest.Verifier{"apple": attest.NewMockVerifier(nil, nil)},
 		signer:       token.NewSigner([]byte("clock-test-secret")),
 		challengeTTL: 5 * time.Minute,
 		now:          func() time.Time { return fixed },
@@ -200,63 +203,6 @@ func TestVerifyEndpoint_BadBase64Challenge(t *testing.T) {
 	}
 	if len(errs) != 1 || errs[0].Field != "challenge" {
 		t.Errorf("errors = %+v, want single error on field=challenge", errs)
-	}
-}
-
-func TestUpsertDevice_NilDB(t *testing.T) {
-	if _, err := upsertDevice(context.Background(), nil, "key", []byte("pub"), []byte("receipt"), time.Now()); err == nil {
-		t.Fatal("upsertDevice: want error for nil db, got nil")
-	}
-}
-
-// TestUpsertDevice_ClosedDB confirms upsertDevice propagates the underlying
-// ExecContext error for a real (non-nil) but closed DB, distinct from the
-// nil-db guard above.
-func TestUpsertDevice_ClosedDB(t *testing.T) {
-	database := dbtest.SetupDB(t)
-	database.Close()
-
-	if _, err := upsertDevice(context.Background(), database, "key", []byte("pub"), []byte("receipt"), time.Now()); err == nil {
-		t.Fatal("upsertDevice: want error for closed db, got nil")
-	}
-}
-
-// TestUpsertDevice_EnrolmentTrustMatchesTrustBase guards issue #15: a freshly
-// enrolled device must store trust.TrustBase, not the historical 1.00 default,
-// so the first recompute does not look like an unexplained halving.
-func TestUpsertDevice_EnrolmentTrustMatchesTrustBase(t *testing.T) {
-	database := dbtest.SetupDB(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	deviceID, err := upsertDevice(ctx, database, "enrol-trust-key", []byte("pub"), []byte("receipt"), now)
-	if err != nil {
-		t.Fatalf("upsertDevice: %v", err)
-	}
-
-	var trustWeight float64
-	if err := database.QueryRowContext(ctx, "SELECT trust_weight FROM devices WHERE device_id = ?", deviceID).Scan(&trustWeight); err != nil {
-		t.Fatalf("select trust_weight: %v", err)
-	}
-	if trustWeight != trust.TrustBase {
-		t.Errorf("trust_weight = %v, want trust.TrustBase (%v)", trustWeight, trust.TrustBase)
-	}
-
-	// Schema default alone (insert omitting trust_weight) must also be TrustBase
-	// after migration 0006, so any other enrolment path stays aligned.
-	res, err := database.ExecContext(ctx, "INSERT INTO devices (key_id, public_key) VALUES (?, ?)", "schema-default-key", []byte("pub"))
-	if err != nil {
-		t.Fatalf("insert omitting trust_weight: %v", err)
-	}
-	schemaID, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("LastInsertId: %v", err)
-	}
-	if err := database.QueryRowContext(ctx, "SELECT trust_weight FROM devices WHERE device_id = ?", schemaID).Scan(&trustWeight); err != nil {
-		t.Fatalf("select schema-default trust_weight: %v", err)
-	}
-	if trustWeight != trust.TrustBase {
-		t.Errorf("schema-default trust_weight = %v, want trust.TrustBase (%v)", trustWeight, trust.TrustBase)
 	}
 }
 
@@ -420,4 +366,232 @@ func doVerify(t *testing.T, h *attestHandler, body verifyRequest) *httptest.Resp
 	rec := httptest.NewRecorder()
 	h.handleVerify(rec, req)
 	return rec
+}
+
+// twoPlatformHandler returns an attestHandler wired with distinct MockVerifiers
+// for "apple" and "android", so a test can tell which one was actually used
+// (by the distinct canned public key each returns for VerifyAttestation, or by
+// asserting on the persisted device row).
+func twoPlatformHandler(store attest.ChallengeStore, database *sql.DB) *attestHandler {
+	return &attestHandler{
+		db:    database,
+		store: store,
+		verifiers: map[string]attest.Verifier{
+			"apple":   attest.NewMockVerifier([]byte("mock-apple-pubkey"), nil),
+			"android": attest.NewMockVerifier([]byte("mock-android-pubkey"), nil),
+		},
+		signer:       token.NewSigner([]byte("test-secret")),
+		challengeTTL: 5 * time.Minute,
+		tokenTTL:     time.Hour,
+	}
+}
+
+func TestHandleVerify_defaultsToApplePlatformWhenFieldOmitted(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	chStore := attest.NewMemoryChallengeStore()
+	ch, err := chStore.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	h := twoPlatformHandler(chStore, database)
+
+	keyID := "platform-default-key"
+	body := verifyRequest{
+		KeyID:       keyID,
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(ch),
+		// Platform intentionally omitted -- every iOS client shipped before
+		// this field existed never sends it.
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+
+	_, _, _, platform, err := store.GetDeviceByKeyID(reqCtx(), database, keyID)
+	if err != nil {
+		t.Fatalf("GetDeviceByKeyID: %v", err)
+	}
+	if platform != "apple" {
+		t.Errorf("persisted platform = %q, want %q", platform, "apple")
+	}
+}
+
+func TestHandleVerify_androidPlatformSelectsAndroidVerifier(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	chStore := attest.NewMemoryChallengeStore()
+	ch, err := chStore.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	h := twoPlatformHandler(chStore, database)
+
+	keyID := "platform-android-key"
+	body := verifyRequest{
+		KeyID:       keyID,
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(ch),
+		Platform:    "android",
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+
+	_, pubDER, _, platform, err := store.GetDeviceByKeyID(reqCtx(), database, keyID)
+	if err != nil {
+		t.Fatalf("GetDeviceByKeyID: %v", err)
+	}
+	if platform != "android" {
+		t.Errorf("persisted platform = %q, want %q", platform, "android")
+	}
+	// The android MockVerifier's canned public key, not the apple one, must be
+	// what got persisted -- proof the android verifier (not apple's) ran.
+	if string(pubDER) != "mock-android-pubkey" {
+		t.Errorf("persisted public key = %q, want %q", pubDER, "mock-android-pubkey")
+	}
+}
+
+func TestHandleVerify_unknownPlatformRejected(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	chStore := attest.NewMemoryChallengeStore()
+	ch, err := chStore.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	h := twoPlatformHandler(chStore, database)
+
+	keyID := "platform-unknown-key"
+	body := verifyRequest{
+		KeyID:       keyID,
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(ch),
+		Platform:    "windows",
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+	success, errs := decodeEnvelopeErrors(t, rec.Body.Bytes())
+	if success {
+		t.Error("success = true, want false")
+	}
+	if len(errs) != 1 || errs[0].Field != "platform" {
+		t.Errorf("errors = %+v, want single error on field=platform", errs)
+	}
+
+	if _, _, _, _, err := store.GetDeviceByKeyID(reqCtx(), database, keyID); !errors.Is(err, store.ErrDeviceNotFound) {
+		t.Errorf("GetDeviceByKeyID error = %v, want store.ErrDeviceNotFound (no device row should have been created)", err)
+	}
+}
+
+// TestHandleVerify_androidPlatformRejectedWhenAttestModeIsAppleOnly guards the
+// fail-closed property buildVerifiers depends on: a deployment that only
+// enabled ATTEST_MODE=apple must not expose any fallback that accepts a
+// platform:"android" attestation, mock or otherwise.
+func TestHandleVerify_androidPlatformRejectedWhenAttestModeIsAppleOnly(t *testing.T) {
+	cfg := config.Config{
+		AttestMode:        "apple",
+		AppID:             "ABCDE12345.com.hushield.app",
+		DeviceTokenSecret: "test-secret",
+		DeviceTokenTTL:    time.Hour,
+		ChallengeTTL:      5 * time.Minute,
+	}
+	verifiers := buildVerifiers(cfg)
+	if _, ok := verifiers["android"]; ok {
+		t.Fatalf("buildVerifiers(AttestMode=apple) = %v, want no \"android\" entry at all", verifiers)
+	}
+
+	store := attest.NewMemoryChallengeStore()
+	ch, err := store.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	h := &attestHandler{
+		store:        store,
+		verifiers:    verifiers,
+		signer:       token.NewSigner([]byte("test-secret")),
+		challengeTTL: 5 * time.Minute,
+		tokenTTL:     time.Hour,
+	}
+
+	body := verifyRequest{
+		KeyID:       "somekey",
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(ch),
+		Platform:    "android",
+	}
+	rec := doVerify(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+}
+
+// TestHandleAssert_usesDevicesStoredPlatformNotAnyClientClaim guards the
+// stored-platform dispatch at assert time: assertRequest carries no platform
+// field at all (by design, so there is nothing for a client to spoof), so
+// handleAssert must look up the verifier from the device's persisted platform,
+// not any client-supplied value.
+func TestHandleAssert_usesDevicesStoredPlatformNotAnyClientClaim(t *testing.T) {
+	database := dbtest.SetupDB(t)
+	store := attest.NewMemoryChallengeStore()
+
+	// Distinguishing NewCounter per platform: whichever ends up persisted as
+	// sign_count reveals which verifier actually ran.
+	appleVerifier := &attest.MockVerifier{PublicKeyDER: []byte("mock-apple-pubkey"), NewCounter: 111}
+	androidVerifier := &attest.MockVerifier{PublicKeyDER: []byte("mock-android-pubkey"), NewCounter: 222}
+	h := &attestHandler{
+		db:    database,
+		store: store,
+		verifiers: map[string]attest.Verifier{
+			"apple":   appleVerifier,
+			"android": androidVerifier,
+		},
+		signer:       token.NewSigner([]byte("test-secret")),
+		challengeTTL: 5 * time.Minute,
+		tokenTTL:     time.Hour,
+	}
+
+	// 1. Enroll as "android" via handleVerify, so a real row with
+	// platform="android" and the android verifier's public key exists.
+	keyID := "assert-stored-platform-key"
+	verifyCh, err := store.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	vBody := verifyRequest{
+		KeyID:       keyID,
+		Attestation: base64.StdEncoding.EncodeToString([]byte("attestation")),
+		Challenge:   base64.StdEncoding.EncodeToString(verifyCh),
+		Platform:    "android",
+	}
+	vRec := doVerify(t, h, vBody)
+	if vRec.Code != http.StatusOK {
+		t.Fatalf("verify status = %d, want 200; body=%s", vRec.Code, vRec.Body)
+	}
+
+	// 2. Assert for that key_id. assertRequest has no platform field to spoof.
+	assertCh, err := store.Issue(time.Now(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	aBody := assertRequest{
+		KeyID:     keyID,
+		Assertion: base64.StdEncoding.EncodeToString([]byte("assertion")),
+		Challenge: base64.StdEncoding.EncodeToString(assertCh),
+	}
+	aRec := doAssert(t, h, aBody)
+	if aRec.Code != http.StatusOK {
+		t.Fatalf("assert status = %d, want 200; body=%s", aRec.Code, aRec.Body)
+	}
+
+	// 3. The android verifier's NewCounter (222) -- not the apple verifier's
+	// (111) -- must be what got persisted.
+	var signCount uint32
+	if err := database.QueryRow("SELECT sign_count FROM devices WHERE key_id = ?", keyID).Scan(&signCount); err != nil {
+		t.Fatalf("select sign_count: %v", err)
+	}
+	if signCount != androidVerifier.NewCounter {
+		t.Errorf("sign_count = %d, want %d (the android verifier's counter, not apple's %d)", signCount, androidVerifier.NewCounter, appleVerifier.NewCounter)
+	}
 }
