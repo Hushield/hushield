@@ -20,6 +20,13 @@ type Config struct {
 	// AppID is the App Attest app identifier "<TeamID>.<BundleID>". Required
 	// when AttestMode == "apple".
 	AppID string
+	// AndroidPackageName is the Android application ID Play Integrity tokens
+	// must be issued for. Required when AttestMode is "android" or "both".
+	AndroidPackageName string
+	// PlayIntegrityCredentialsPath is a path to a Google service-account JSON
+	// credentials file scoped for the Play Integrity API. Required when
+	// AttestMode is "android" or "both".
+	PlayIntegrityCredentialsPath string
 	// DeviceTokenSecret is the HMAC secret used to sign stateless device
 	// tokens. When unset a documented insecure dev default is used and
 	// DeviceTokenSecretIsDefault is set so startup can warn.
@@ -82,8 +89,10 @@ const (
 // apple-mode production checks, so a typo like "Apple" silently disabled
 // authentication in production.
 var validAttestModes = map[string]bool{
-	"mock":  true,
-	"apple": true,
+	"mock":    true,
+	"apple":   true,
+	"android": true,
+	"both":    true,
 }
 
 // placeholderMarkers are substrings that betray an unedited example value. The
@@ -109,13 +118,13 @@ func looksLikePlaceholder(s string) bool {
 // operator reading journalctl knows exactly which value to fix.
 func validateSecret(name, value string) error {
 	if value == "" {
-		return fmt.Errorf("config: %s is required when ATTEST_MODE=apple; generate one with `openssl rand -hex 32`", name)
+		return fmt.Errorf("config: %s is required when ATTEST_MODE is not mock; generate one with `openssl rand -hex 32`", name)
 	}
 	if looksLikePlaceholder(value) {
 		return fmt.Errorf("config: %s still contains an example placeholder value; generate a real secret with `openssl rand -hex 32`", name)
 	}
 	if len(value) < minSecretLength {
-		return fmt.Errorf("config: %s must be at least %d characters when ATTEST_MODE=apple (got %d); generate one with `openssl rand -hex 32`", name, minSecretLength, len(value))
+		return fmt.Errorf("config: %s must be at least %d characters when ATTEST_MODE is not mock (got %d); generate one with `openssl rand -hex 32`", name, minSecretLength, len(value))
 	}
 	return nil
 }
@@ -139,33 +148,45 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		DBDsn:                      getEnv("DB_DSN", defaultDBDsn),
-		Addr:                       getEnv("ADDR", defaultAddr),
-		AdminToken:                 getEnv("ADMIN_TOKEN", ""),
-		AttestMode:                 getEnv("ATTEST_MODE", defaultAttestMode),
-		AppID:                      getEnv("APP_ID", ""),
-		DeviceTokenSecret:          secret,
-		DeviceTokenSecretIsDefault: secretIsDefault,
-		DeviceTokenTTL:             deviceTokenTTL,
-		ChallengeTTL:               challengeTTL,
-		ChallengeStore:             getEnv("CHALLENGE_STORE", defaultChallengeStore),
-		RedisURL:                   getEnv("REDIS_URL", ""),
-		APNSKeyPath:                getEnv("APNS_KEY_PATH", ""),
-		APNSKeyID:                  getEnv("APNS_KEY_ID", ""),
-		APNSTeamID:                 getEnv("APNS_TEAM_ID", ""),
-		APNSTopic:                  getEnv("APNS_TOPIC", ""),
+		DBDsn:                        getEnv("DB_DSN", defaultDBDsn),
+		Addr:                         getEnv("ADDR", defaultAddr),
+		AdminToken:                   getEnv("ADMIN_TOKEN", ""),
+		AttestMode:                   getEnv("ATTEST_MODE", defaultAttestMode),
+		AppID:                        getEnv("APP_ID", ""),
+		AndroidPackageName:           getEnv("ANDROID_PACKAGE_NAME", ""),
+		PlayIntegrityCredentialsPath: getEnv("PLAY_INTEGRITY_CREDENTIALS_PATH", ""),
+		DeviceTokenSecret:            secret,
+		DeviceTokenSecretIsDefault:   secretIsDefault,
+		DeviceTokenTTL:               deviceTokenTTL,
+		ChallengeTTL:                 challengeTTL,
+		ChallengeStore:               getEnv("CHALLENGE_STORE", defaultChallengeStore),
+		RedisURL:                     getEnv("REDIS_URL", ""),
+		APNSKeyPath:                  getEnv("APNS_KEY_PATH", ""),
+		APNSKeyID:                    getEnv("APNS_KEY_ID", ""),
+		APNSTeamID:                   getEnv("APNS_TEAM_ID", ""),
+		APNSTopic:                    getEnv("APNS_TOPIC", ""),
 	}
 
 	// Reject unknown modes before any mode-specific branch, so a typo can never
 	// be treated as "not apple" and thus skip the production checks below.
 	if !validAttestModes[cfg.AttestMode] {
-		return Config{}, fmt.Errorf("config: ATTEST_MODE=%q is not a recognized mode (want \"mock\" or \"apple\"); refusing to start rather than defaulting to the mock verifier, which accepts any attestation", cfg.AttestMode)
+		return Config{}, fmt.Errorf("config: ATTEST_MODE=%q is not a recognized mode (want \"mock\", \"apple\", \"android\", or \"both\"); refusing to start rather than defaulting to the mock verifier, which accepts any attestation", cfg.AttestMode)
 	}
 
-	if cfg.AttestMode == "apple" {
+	if cfg.AttestMode == "apple" || cfg.AttestMode == "both" {
 		if cfg.AppID == "" {
-			return Config{}, fmt.Errorf("config: APP_ID is required when ATTEST_MODE=apple")
+			return Config{}, fmt.Errorf("config: ATTEST_MODE=%q requires APP_ID", cfg.AttestMode)
 		}
+	}
+	if cfg.AttestMode == "android" || cfg.AttestMode == "both" {
+		if cfg.AndroidPackageName == "" {
+			return Config{}, fmt.Errorf("config: ATTEST_MODE=%q requires ANDROID_PACKAGE_NAME", cfg.AttestMode)
+		}
+		if cfg.PlayIntegrityCredentialsPath == "" {
+			return Config{}, fmt.Errorf("config: ATTEST_MODE=%q requires PLAY_INTEGRITY_CREDENTIALS_PATH", cfg.AttestMode)
+		}
+	}
+	if cfg.AttestMode != "mock" {
 		if err := validateSecret("DEVICE_TOKEN_SECRET", cfg.DeviceTokenSecret); err != nil {
 			return Config{}, err
 		}
