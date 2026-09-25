@@ -17,6 +17,10 @@ struct StatusScreen: View {
                     countsRow
                     lastSyncRow
 
+                    if model.isSyncing {
+                        syncProgressCard
+                    }
+
                     if case let .failed(message) = model.phase {
                         ErrorBanner(message: message)
                             .accessibilityIdentifier("status.syncError")
@@ -33,6 +37,46 @@ struct StatusScreen: View {
             .navigationTitle("Status")
             .onAppear { model.refresh() }
         }
+    }
+
+    /// Shown only while a sync runs. A first sync pages through the entire
+    /// blocklist, so without this the screen looks frozen.
+    private var syncProgressCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                HStack {
+                    Text("Syncing")
+                        .font(Theme.Typography.sectionTitle)
+                    Spacer()
+                    if let percent = model.progressPercentText {
+                        Text(percent)
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(Theme.secondaryText)
+                            .contentTransition(.numericText())
+                            .accessibilityIdentifier("status.syncPercent")
+                    }
+                }
+
+                // Determinate once a page has reported a total; indeterminate
+                // until then, and against a server that sends none at all.
+                if let fraction = model.progress?.fraction {
+                    ProgressView(value: fraction)
+                        .tint(Theme.safe)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(Theme.safe)
+                }
+
+                if let detail = model.progressDetailText {
+                    Text(detail)
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.secondaryText)
+                        .accessibilityIdentifier("status.syncDetail")
+                }
+            }
+        }
+        .accessibilityIdentifier("status.syncProgress")
     }
 
     private var enrollmentCard: some View {

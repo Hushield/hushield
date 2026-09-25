@@ -17,7 +17,11 @@ protocol NumberLookup {
 
 /// Runs a full blocklist sync. Satisfied by `SyncAdapter`.
 protocol Syncing {
-    func sync() async throws
+    /// - Parameter onProgress: called after each page, so the Status screen
+    ///   can show how far a full sync has got. A first sync pages through the
+    ///   entire blocklist, which is long enough that a bare spinner reads as
+    ///   a hang.
+    func sync(onProgress: (@Sendable (SyncProgress) -> Void)?) async throws
 }
 
 /// Read-only view of local enrollment + blocklist status. Satisfied by
