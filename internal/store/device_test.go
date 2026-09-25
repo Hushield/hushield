@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"spamfilter/internal/dbtest"
+	"spamfilter/internal/trust"
 )
 
 func TestGetDeviceByKeyID(t *testing.T) {
@@ -87,6 +88,24 @@ func TestUpsertDevicePlatform_existingRowKeepsItsPlatform(t *testing.T) {
 	}
 	if string(pubDER) != "pubkey-v2" {
 		t.Errorf("public key was not updated on re-enroll: got %q", pubDER)
+	}
+}
+
+func TestUpsertDevicePlatform_freshEnrollmentGetsTrustBase(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+
+	deviceID, err := UpsertDevicePlatform(ctx, sqlDB, "trust-base-key-1", []byte("pubkey-trust-base-key-1"), nil, "android", time.Now())
+	if err != nil {
+		t.Fatalf("UpsertDevicePlatform: %v", err)
+	}
+
+	var trustWeight float64
+	if err := sqlDB.QueryRow("SELECT trust_weight FROM devices WHERE device_id = ?", deviceID).Scan(&trustWeight); err != nil {
+		t.Fatalf("select trust_weight: %v", err)
+	}
+	if trustWeight != trust.TrustBase {
+		t.Errorf("trust_weight = %v, want trust.TrustBase (%v)", trustWeight, trust.TrustBase)
 	}
 }
 
