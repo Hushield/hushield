@@ -34,6 +34,7 @@ ios/SpamFilterKit/ Shared framework: API client, attest, sync, stores
 ios/SpamFilter/    SwiftUI app (Report / Lookup / Status / Setup)
 ios/CallDirectoryExtension/   Blocks and labels incoming calls
 ios/MessageFilterExtension/   Offline SMS classification
+android/app/       Native Android app (Kotlin): attestation, call blocking, SMS filtering
 ```
 
 `internal/scoring` and `internal/trust` are deliberately pure and dependency-free. Keep them that
