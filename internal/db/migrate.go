@@ -100,7 +100,29 @@ func loadMigrations() ([]migration, error) {
 		migrations = append(migrations, migration{version: version, name: name, sql: string(contents)})
 	}
 
+	if err := checkDuplicateVersions(migrations); err != nil {
+		return nil, err
+	}
+
 	sort.Slice(migrations, func(i, j int) bool { return migrations[i].version < migrations[j].version })
 
 	return migrations, nil
+}
+
+// checkDuplicateVersions returns an error if two migrations in migrations
+// share the same version number. Two migration files claiming the same
+// version is a numbering collision (e.g. two branches each adding their own
+// "0007_*.sql"): silently keeping both would mean only one of them actually
+// ever gets recorded as applied, and the other's schema change never
+// happens. Failing loudly here is far cheaper than debugging that in
+// production.
+func checkDuplicateVersions(migrations []migration) error {
+	seen := make(map[int]string, len(migrations))
+	for _, m := range migrations {
+		if existing, ok := seen[m.version]; ok {
+			return fmt.Errorf("db: duplicate migration version %d: %s and %s", m.version, existing, m.name)
+		}
+		seen[m.version] = m.name
+	}
+	return nil
 }

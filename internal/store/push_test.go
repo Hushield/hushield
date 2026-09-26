@@ -15,7 +15,7 @@ func TestUpsertPushToken(t *testing.T) {
 	deviceID := insertDevice(t, sqlDB, "push-key-1", 1.00)
 	now := time.Now()
 
-	if err := UpsertPushToken(ctx, sqlDB, deviceID, "abc123", "production", now); err != nil {
+	if err := UpsertPushToken(ctx, sqlDB, deviceID, "abc123", "production", "apns", now); err != nil {
 		t.Fatalf("UpsertPushToken: %v", err)
 	}
 
@@ -38,7 +38,7 @@ func TestUpsertPushToken(t *testing.T) {
 	}
 
 	// A second call replaces the prior token/environment.
-	if err := UpsertPushToken(ctx, sqlDB, deviceID, "def456", "sandbox", now); err != nil {
+	if err := UpsertPushToken(ctx, sqlDB, deviceID, "def456", "sandbox", "apns", now); err != nil {
 		t.Fatalf("UpsertPushToken (replace): %v", err)
 	}
 	if err := sqlDB.QueryRow(
@@ -60,7 +60,7 @@ func TestListPushTargets(t *testing.T) {
 	withToken := insertDevice(t, sqlDB, "push-key-with", 1.00)
 	insertDevice(t, sqlDB, "push-key-without", 1.00) // no token registered
 
-	if err := UpsertPushToken(ctx, sqlDB, withToken, "tok-with", "production", now); err != nil {
+	if err := UpsertPushToken(ctx, sqlDB, withToken, "tok-with", "production", "apns", now); err != nil {
 		t.Fatalf("UpsertPushToken: %v", err)
 	}
 
@@ -74,5 +74,37 @@ func TestListPushTargets(t *testing.T) {
 	got := targets[0]
 	if got.DeviceID != withToken || got.Token != "tok-with" || got.Environment != "production" {
 		t.Errorf("target = %+v, want device %d/tok-with/production", got, withToken)
+	}
+	if got.Platform != "apns" {
+		t.Errorf("Platform = %q, want apns", got.Platform)
+	}
+}
+
+func TestUpsertPushToken_storesPlatform(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	deviceID := insertDevice(t, sqlDB, "fcm-device-1", 1.0)
+	if err := UpsertPushToken(ctx, sqlDB, deviceID, "fcm-token-abc", "", "fcm", now); err != nil {
+		t.Fatalf("UpsertPushToken: %v", err)
+	}
+
+	targets, err := ListPushTargets(ctx, sqlDB)
+	if err != nil {
+		t.Fatalf("ListPushTargets: %v", err)
+	}
+	var found bool
+	for _, target := range targets {
+		if target.DeviceID != deviceID {
+			continue
+		}
+		found = true
+		if target.Platform != "fcm" {
+			t.Errorf("Platform = %q, want %q", target.Platform, "fcm")
+		}
+	}
+	if !found {
+		t.Fatalf("device %d not found in ListPushTargets", deviceID)
 	}
 }
