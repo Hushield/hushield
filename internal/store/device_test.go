@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"spamfilter/internal/dbtest"
+	"spamfilter/internal/trust"
 )
 
 func TestGetDeviceByKeyID(t *testing.T) {
@@ -15,7 +16,7 @@ func TestGetDeviceByKeyID(t *testing.T) {
 
 	wantID := insertDevice(t, sqlDB, "assert-key-1", 1.00)
 
-	gotID, pubDER, signCount, err := GetDeviceByKeyID(ctx, sqlDB, "assert-key-1")
+	gotID, pubDER, signCount, _, err := GetDeviceByKeyID(ctx, sqlDB, "assert-key-1")
 	if err != nil {
 		t.Fatalf("GetDeviceByKeyID: %v", err)
 	}
@@ -34,9 +35,77 @@ func TestGetDeviceByKeyID_NotFound(t *testing.T) {
 	sqlDB := dbtest.SetupDB(t)
 	ctx := context.Background()
 
-	_, _, _, err := GetDeviceByKeyID(ctx, sqlDB, "no-such-key")
+	_, _, _, _, err := GetDeviceByKeyID(ctx, sqlDB, "no-such-key")
 	if !errors.Is(err, ErrDeviceNotFound) {
 		t.Errorf("err = %v, want ErrDeviceNotFound", err)
+	}
+}
+
+func TestGetDeviceByKeyID_returnsPlatform(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+
+	_, err := UpsertDevicePlatform(ctx, sqlDB, "android-key-1", []byte("pubkey-android-key-1"), nil, "android", time.Now())
+	if err != nil {
+		t.Fatalf("UpsertDevicePlatform: %v", err)
+	}
+
+	_, _, _, platform, err := GetDeviceByKeyID(ctx, sqlDB, "android-key-1")
+	if err != nil {
+		t.Fatalf("GetDeviceByKeyID: %v", err)
+	}
+	if platform != "android" {
+		t.Errorf("platform = %q, want %q", platform, "android")
+	}
+}
+
+func TestUpsertDevicePlatform_existingRowKeepsItsPlatform(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	id1, err := UpsertDevicePlatform(ctx, sqlDB, "apple-key-1", []byte("pubkey-v1"), nil, "apple", now)
+	if err != nil {
+		t.Fatalf("first UpsertDevicePlatform: %v", err)
+	}
+
+	// Re-enrolling the same key_id must not let a re-attestation silently
+	// change its recorded platform.
+	id2, err := UpsertDevicePlatform(ctx, sqlDB, "apple-key-1", []byte("pubkey-v2"), nil, "apple", now)
+	if err != nil {
+		t.Fatalf("second UpsertDevicePlatform: %v", err)
+	}
+	if id1 != id2 {
+		t.Fatalf("re-enrolling key_id created a new device: %d != %d", id1, id2)
+	}
+
+	_, pubDER, _, platform, err := GetDeviceByKeyID(ctx, sqlDB, "apple-key-1")
+	if err != nil {
+		t.Fatalf("GetDeviceByKeyID: %v", err)
+	}
+	if platform != "apple" {
+		t.Errorf("platform = %q, want %q", platform, "apple")
+	}
+	if string(pubDER) != "pubkey-v2" {
+		t.Errorf("public key was not updated on re-enroll: got %q", pubDER)
+	}
+}
+
+func TestUpsertDevicePlatform_freshEnrollmentGetsTrustBase(t *testing.T) {
+	sqlDB := dbtest.SetupDB(t)
+	ctx := context.Background()
+
+	deviceID, err := UpsertDevicePlatform(ctx, sqlDB, "trust-base-key-1", []byte("pubkey-trust-base-key-1"), nil, "android", time.Now())
+	if err != nil {
+		t.Fatalf("UpsertDevicePlatform: %v", err)
+	}
+
+	var trustWeight float64
+	if err := sqlDB.QueryRow("SELECT trust_weight FROM devices WHERE device_id = ?", deviceID).Scan(&trustWeight); err != nil {
+		t.Fatalf("select trust_weight: %v", err)
+	}
+	if trustWeight != trust.TrustBase {
+		t.Errorf("trust_weight = %v, want trust.TrustBase (%v)", trustWeight, trust.TrustBase)
 	}
 }
 
@@ -51,7 +120,7 @@ func TestUpdateDeviceSignCount(t *testing.T) {
 		t.Fatalf("UpdateDeviceSignCount: %v", err)
 	}
 
-	_, _, signCount, err := GetDeviceByKeyID(ctx, sqlDB, "assert-key-2")
+	_, _, signCount, _, err := GetDeviceByKeyID(ctx, sqlDB, "assert-key-2")
 	if err != nil {
 		t.Fatalf("GetDeviceByKeyID: %v", err)
 	}

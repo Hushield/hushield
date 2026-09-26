@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -46,7 +47,7 @@ func main() {
 // binary and reading the output.
 func run(args []string) error {
 	fs := flag.NewFlagSet("recompute", flag.ContinueOnError)
-	notify := fs.Bool("notify", true, "send a silent APNs refresh push to registered devices after recompute (no-op when APNs creds are absent)")
+	notify := fs.Bool("notify", true, "send a silent APNs/FCM refresh push to registered devices after recompute (no-op per platform when that platform's creds are absent)")
 	interval := fs.Duration("interval", 0, "if > 0, run continuously, repeating every interval, until SIGINT/SIGTERM (0 = run once and exit, the default)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parsing flags: %w", err)
@@ -100,6 +101,14 @@ func run(args []string) error {
 // otherwise requires a real Apple .p8 auth key and so was unreachable.
 var newNotifier = push.NewNotifier
 
+// newFCMNotifier mirrors newNotifier for the FCM side: indirected through a
+// variable so tests can inject a fake in place of push.NewFCMNotifier, which
+// otherwise builds a notifier that makes real HTTP calls to
+// fcm.googleapis.com.
+var newFCMNotifier = func(httpClient *http.Client, projectID, accessToken string) push.Notifier {
+	return push.NewFCMNotifier(httpClient, projectID, accessToken)
+}
+
 // runCycle performs a single recompute-and-notify cycle: it re-applies
 // time-decay, recomputes cached number/device status via store.RecomputeAll,
 // and (when notify is true) broadcasts a silent refresh push to registered
@@ -126,11 +135,38 @@ func runCycle(ctx context.Context, sqlDB *sql.DB, cfg config.Config, notify bool
 	// which makes NewNotifier fatal) can never fail a recompute that already
 	// succeeded. When -notify is off we simply skip pushing.
 	if notify {
-		notifier, realAPNs, err := newNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
+		apnsNotifier, realAPNs, err := newNotifier(cfg.APNSKeyPath, cfg.APNSKeyID, cfg.APNSTeamID, cfg.APNSTopic)
 		if err != nil {
 			return fmt.Errorf("building push notifier: %w", err)
 		}
-		if realAPNs {
+		// realFCM mirrors realAPNs: FCM is "really configured" iff a project
+		// id is set. The two platforms are gated independently -- a
+		// deployment can roll out Android (FCM_PROJECT_ID set) before Apple
+		// push credentials exist (APNS_KEY_PATH unset), or vice versa, and
+		// each platform's devices must still get pushed regardless of the
+		// other platform's configuration state.
+		realFCM := cfg.FCMProjectID != ""
+		if realAPNs || realFCM {
+			notifier := &push.PlatformNotifier{
+				APNs: push.NoopNotifier{},
+				FCM:  push.NoopNotifier{},
+			}
+			if realAPNs {
+				notifier.APNs = apnsNotifier
+			}
+			if realFCM {
+				// TODO(android): fcmAccessToken is a placeholder. A real
+				// deployment needs a short-lived OAuth2 access token minted
+				// from a service-account credential scoped to
+				// https://www.googleapis.com/auth/firebase.messaging,
+				// refreshed on a schedule (tokens are valid ~1h) -- the same
+				// underlying Google-credentials problem as the Play
+				// Integrity decoder's TODO in
+				// internal/attest/playintegrity.go, solved once there, not
+				// twice here.
+				fcmAccessToken := ""
+				notifier.FCM = newFCMNotifier(http.DefaultClient, cfg.FCMProjectID, fcmAccessToken)
+			}
 			targets, err := store.ListPushTargets(ctx, sqlDB)
 			if err != nil {
 				return fmt.Errorf("listing push targets: %w", err)

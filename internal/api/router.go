@@ -26,7 +26,7 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 	attestH := &attestHandler{
 		db:           db,
 		store:        buildChallengeStore(cfg),
-		verifier:     buildVerifier(cfg),
+		verifiers:    buildVerifiers(cfg),
 		signer:       signer,
 		challengeTTL: cfg.ChallengeTTL,
 		tokenTTL:     cfg.DeviceTokenTTL,
@@ -62,13 +62,34 @@ func NewRouter(db *sql.DB, cfg config.Config) http.Handler {
 	return RequestIDMiddleware(mux)
 }
 
-// buildVerifier selects the App Attest verifier per config: a MockVerifier
-// for dev/tests, or the real AppleVerifier when ATTEST_MODE=apple.
-func buildVerifier(cfg config.Config) attest.Verifier {
-	if cfg.AttestMode == "apple" {
-		return attest.NewAppleVerifier(cfg.AppID, attest.DefaultAppleRoots())
+// buildVerifiers selects the App Attest and Play Integrity verifiers per
+// config, keyed by platform. ATTEST_MODE=mock is the one case where
+// "accepts anything" is the point (local dev/tests): both "apple" and
+// "android" map to a MockVerifier. Every other mode must fail closed: a
+// platform this deployment did not enable is left ABSENT from the map, not
+// backed by a mock -- attestHandler already 400s a platform key it doesn't
+// find (see handleVerify's `verifiers[platform]` lookup), which is exactly
+// the behavior an unconfigured platform needs. Falling back to a permissive
+// MockVerifier here instead would mean an ATTEST_MODE=android production
+// deployment still accepts a forged platform:"apple" attestation, since the
+// mock verifier accepts anything -- the opposite of "fails closed."
+func buildVerifiers(cfg config.Config) map[string]attest.Verifier {
+	if cfg.AttestMode == "mock" {
+		return map[string]attest.Verifier{
+			"apple":   attest.NewMockVerifier([]byte("mock-public-key-der"), nil),
+			"android": attest.NewMockVerifier([]byte("mock-public-key-der"), nil),
+		}
 	}
-	return attest.NewMockVerifier([]byte("mock-public-key-der"), nil)
+
+	verifiers := map[string]attest.Verifier{}
+	if cfg.AttestMode == "apple" || cfg.AttestMode == "both" {
+		verifiers["apple"] = attest.NewAppleVerifier(cfg.AppID, attest.DefaultAppleRoots())
+	}
+	if cfg.AttestMode == "android" || cfg.AttestMode == "both" {
+		decoder := attest.NewDefaultIntegrityDecoder(cfg.AndroidPackageName)
+		verifiers["android"] = attest.NewPlayIntegrityVerifier(cfg.AndroidPackageName, decoder)
+	}
+	return verifiers
 }
 
 // buildChallengeStore selects the attest.ChallengeStore per config: the
