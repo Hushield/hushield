@@ -100,11 +100,11 @@ private struct SyncAdapter: Syncing {
     let defaults: UserDefaults
     let store: BlocklistStore?
 
-    func sync() async throws {
+    func sync(onProgress: (@Sendable (SyncProgress) -> Void)?) async throws {
         guard let syncService else {
             throw BlocklistStore.FactoryError.appGroupContainerUnavailable(identifier: AppEnvironment.appGroupIdentifier)
         }
-        try await syncService.sync()
+        try await syncService.sync(onProgress: onProgress)
         defaults.set(Date().timeIntervalSince1970, forKey: AppEnvironment.lastSyncedKey)
     }
 }

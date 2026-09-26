@@ -1,0 +1,24 @@
+[Unit]
+Description=Import the FTC Do Not Call complaint feed once a day
+Documentation=https://github.com/Hushield/hushield
+
+[Timer]
+# The FTC publishes each weekday's file by about noon Eastern. 18:30 UTC is
+# 14:30 ET / 13:30 EDT, comfortably after publication without waiting a whole
+# extra day. Pinned to UTC so the schedule does not shift twice a year.
+OnCalendar=*-*-* 18:30:00 UTC
+
+# A run missed while the host was down fires once on the next boot. The script
+# imports whatever the newest published file is, so a late run still lands
+# current data rather than repeating a stale day.
+Persistent=true
+
+# The download is a third-party HTTP fetch on a fixed schedule; jitter keeps
+# every deployment of this service from hitting ftc.gov on the same second.
+RandomizedDelaySec=15min
+AccuracySec=1min
+
+Unit=hushield-seed-ftc.service
+
+[Install]
+WantedBy=timers.target

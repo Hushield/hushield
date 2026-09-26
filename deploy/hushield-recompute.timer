@@ -1,11 +1,23 @@
 [Unit]
-Description=Run HuShield score decay and trust recomputation every 15 minutes
+Description=Run HuShield score decay and trust recomputation every 6 hours
 Documentation=https://github.com/Hushield/hushield
 
 [Timer]
-# First run shortly after boot, then every 15 minutes.
+# First run shortly after boot, then every 6 hours.
+#
+# This was 15 minutes, which was fine when the table held a handful of rows.
+# After seeding 732k numbers a pass measured 58m52s, so the timer fired, found
+# the unit still active, skipped, and the pass effectively ran back-to-back
+# forever -- saturating MySQL at ~618 selects/sec and competing with the
+# blocklist reads devices sync from.
+#
+# 6 hours is not a compromise. This pass exists ONLY to apply time decay: new
+# community reports and admin overrides recompute their own number
+# synchronously inside the request transaction (api/reports.go,
+# api/admin_overrides.go), so nothing user-facing waits on it. With a 30-day
+# half-life a score moves 0.58% in 6 hours, well inside any threshold.
 OnBootSec=2min
-OnUnitActiveSec=15min
+OnUnitActiveSec=6h
 
 # Persistent means a run missed while the host was down fires once on the next
 # boot rather than being skipped. Scores decay with wall-clock time, so a gap in

@@ -148,7 +148,7 @@ func (h *reportsHandler) writeReport(ctx context.Context, deviceID uint64, e164 
 		return "", err
 	}
 
-	status, err := store.RecomputeNumber(ctx, tx, phoneNumberID, now)
+	status, err := store.RecomputeNumberServing(ctx, tx, phoneNumberID, now)
 	if err != nil {
 		return "", err
 	}

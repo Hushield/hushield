@@ -84,10 +84,22 @@ public final class EnrollmentService {
             return stored.token
         }
 
-        if tokenStore.loadToken() == nil {
+        do {
+            if tokenStore.loadToken() == nil {
+                try await enroll()
+            } else {
+                try await refresh()
+            }
+        } catch AttestationProviderError.keyUnusable {
+            // The stored key ID names a key this install can no longer use --
+            // see `AttestationProviderError.keyUnusable`. Retrying cannot help
+            // because every attempt reuses the same dead key ID from the
+            // Keychain, which is how a device got stuck reporting
+            // `DCError.invalidKey` forever. Discard the whole stored identity
+            // and enrol once with a genuinely new key; a second failure
+            // propagates rather than looping against Apple's servers.
+            tokenStore.clear()
             try await enroll()
-        } else {
-            try await refresh()
         }
 
         guard let stored = tokenStore.loadToken() else {

@@ -26,7 +26,7 @@ func TestBlocklistDelta_ActionsAndStatuses(t *testing.T) {
 			t.Fatalf("UpsertReport (blocked): %v", err)
 		}
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, blockedID, now); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, blockedID, now); err != nil {
 		t.Fatalf("RecomputeNumber (blocked): %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestBlocklistDelta_ActionsAndStatuses(t *testing.T) {
 	if _, err := UpsertReport(ctx, sqlDB, suspectedDevice, suspectedID, scoring.CategoryScam, scoring.VoteSpam, now); err != nil {
 		t.Fatalf("UpsertReport (suspected): %v", err)
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, suspectedID, now); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, suspectedID, now); err != nil {
 		t.Fatalf("RecomputeNumber (suspected): %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestBlocklistDelta_SpoofPrefix(t *testing.T) {
 	if _, err := UpsertReport(ctx, sqlDB, device, spoofID, scoring.CategoryOther, scoring.VoteSpam, now); err != nil {
 		t.Fatalf("UpsertReport: %v", err)
 	}
-	status, err := RecomputeNumber(ctx, sqlDB, spoofID, now)
+	status, err := RecomputeNumberServing(ctx, sqlDB, spoofID, now)
 	if err != nil {
 		t.Fatalf("RecomputeNumber: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestBlocklistDelta_DedupeKeepsBaseStatusForMatchingPrefix(t *testing.T) {
 			t.Fatalf("UpsertReport: %v", err)
 		}
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, numberID, now); err != nil {
 		t.Fatalf("RecomputeNumber: %v", err)
 	}
 
@@ -209,7 +209,7 @@ func TestBlocklistDelta_NameAgreementFloor(t *testing.T) {
 	if err := UpsertCallerName(ctx, sqlDB, nameDevice2, agreedID, "Acme Collections", now); err != nil {
 		t.Fatalf("UpsertCallerName (device2): %v", err)
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, agreedID, now); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, agreedID, now); err != nil {
 		t.Fatalf("RecomputeNumber (agreed): %v", err)
 	}
 
@@ -228,7 +228,7 @@ func TestBlocklistDelta_NameAgreementFloor(t *testing.T) {
 	if err := UpsertCallerName(ctx, sqlDB, loneNameDevice, loneID, "Solo Name", now); err != nil {
 		t.Fatalf("UpsertCallerName (lone): %v", err)
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, loneID, now); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, loneID, now); err != nil {
 		t.Fatalf("RecomputeNumber (lone): %v", err)
 	}
 
@@ -275,7 +275,7 @@ func TestBlocklistDelta_CursorOnlyReturnsChanged(t *testing.T) {
 			t.Fatalf("UpsertReport (A): %v", err)
 		}
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, idA, t0); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, idA, t0); err != nil {
 		t.Fatalf("RecomputeNumber (A): %v", err)
 	}
 
@@ -288,7 +288,7 @@ func TestBlocklistDelta_CursorOnlyReturnsChanged(t *testing.T) {
 	if _, err := UpsertReport(ctx, sqlDB, deviceB, idB, scoring.CategoryScam, scoring.VoteSpam, t0); err != nil {
 		t.Fatalf("UpsertReport (B): %v", err)
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, idB, t0); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, idB, t0); err != nil {
 		t.Fatalf("RecomputeNumber (B): %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestBlocklistDelta_CursorOnlyReturnsChanged(t *testing.T) {
 	if _, err := UpsertReport(ctx, sqlDB, deviceExtra, idA, scoring.CategoryScam, scoring.VoteSpam, t1); err != nil {
 		t.Fatalf("UpsertReport (A bump): %v", err)
 	}
-	if _, err := RecomputeNumber(ctx, sqlDB, idA, t1); err != nil {
+	if _, err := RecomputeNumberServing(ctx, sqlDB, idA, t1); err != nil {
 		t.Fatalf("RecomputeNumber (A bump): %v", err)
 	}
 
@@ -386,7 +386,7 @@ func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) 
 				t.Fatalf("UpsertReport (%d): %v", i, err)
 			}
 		}
-		if _, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil {
+		if _, err := RecomputeNumberServing(ctx, sqlDB, numberID, now); err != nil {
 			t.Fatalf("RecomputeNumber (%d): %v", i, err)
 		}
 	}
@@ -412,7 +412,7 @@ func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) 
 				t.Fatalf("UpsertReport (unblock %d, spam): %v", i, err)
 			}
 		}
-		if status, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusBlocked {
+		if status, err := RecomputeNumberServing(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusBlocked {
 			t.Fatalf("RecomputeNumber (unblock %d, blocked): status=%s err=%v", i, status, err)
 		}
 		for _, deviceID := range deviceIDs {
@@ -422,7 +422,7 @@ func TestBlocklistDelta_KeysetPaginationDoesNotDropSameSecondRows(t *testing.T) 
 		}
 		// Same `now` as above: the flip back to unknown lands in the exact
 		// same updated_at second as the still-blocked numbers.
-		if status, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusUnknown {
+		if status, err := RecomputeNumberServing(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusUnknown {
 			t.Fatalf("RecomputeNumber (unblock %d, unknown): status=%s err=%v", i, status, err)
 		}
 	}
@@ -494,7 +494,7 @@ func TestBlocklistDelta_UnblockLifecycle(t *testing.T) {
 			t.Fatalf("UpsertReport (spam): %v", err)
 		}
 	}
-	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	status, err := RecomputeNumberServing(ctx, sqlDB, numberID, now)
 	if err != nil {
 		t.Fatalf("RecomputeNumber (blocked): %v", err)
 	}
@@ -526,7 +526,7 @@ func TestBlocklistDelta_UnblockLifecycle(t *testing.T) {
 			t.Fatalf("UpsertReport (not_spam): %v", err)
 		}
 	}
-	status, err = RecomputeNumber(ctx, sqlDB, numberID, t1)
+	status, err = RecomputeNumberServing(ctx, sqlDB, numberID, t1)
 	if err != nil {
 		t.Fatalf("RecomputeNumber (unknown): %v", err)
 	}
@@ -580,7 +580,7 @@ func TestBlocklistDelta_AdminAllowProducesUnblock(t *testing.T) {
 			t.Fatalf("UpsertReport: %v", err)
 		}
 	}
-	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	status, err := RecomputeNumberServing(ctx, sqlDB, numberID, now)
 	if err != nil {
 		t.Fatalf("RecomputeNumber (blocked): %v", err)
 	}
@@ -600,7 +600,7 @@ func TestBlocklistDelta_AdminAllowProducesUnblock(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert admin_overrides: %v", err)
 	}
-	status, err = RecomputeNumber(ctx, sqlDB, numberID, t1)
+	status, err = RecomputeNumberServing(ctx, sqlDB, numberID, t1)
 	if err != nil {
 		t.Fatalf("RecomputeNumber (allowlisted): %v", err)
 	}
@@ -687,7 +687,7 @@ func TestBlocklistDelta_Oscillation(t *testing.T) {
 			t.Fatalf("UpsertReport (spam 1): %v", err)
 		}
 	}
-	if status, err := RecomputeNumber(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusBlocked {
+	if status, err := RecomputeNumberServing(ctx, sqlDB, numberID, now); err != nil || status != scoring.StatusBlocked {
 		t.Fatalf("RecomputeNumber (blocked 1): status=%s err=%v", status, err)
 	}
 	_, sec1, id1, err := BlocklistDelta(ctx, sqlDB, 0, 0, "", 500)
@@ -701,7 +701,7 @@ func TestBlocklistDelta_Oscillation(t *testing.T) {
 			t.Fatalf("UpsertReport (not_spam): %v", err)
 		}
 	}
-	if status, err := RecomputeNumber(ctx, sqlDB, numberID, t1); err != nil || status != scoring.StatusUnknown {
+	if status, err := RecomputeNumberServing(ctx, sqlDB, numberID, t1); err != nil || status != scoring.StatusUnknown {
 		t.Fatalf("RecomputeNumber (unknown): status=%s err=%v", status, err)
 	}
 	unblockEntries, sec2, id2, err := BlocklistDelta(ctx, sqlDB, sec1, id1, "", 500)
@@ -718,7 +718,7 @@ func TestBlocklistDelta_Oscillation(t *testing.T) {
 			t.Fatalf("UpsertReport (spam 2): %v", err)
 		}
 	}
-	if status, err := RecomputeNumber(ctx, sqlDB, numberID, t2); err != nil || status != scoring.StatusBlocked {
+	if status, err := RecomputeNumberServing(ctx, sqlDB, numberID, t2); err != nil || status != scoring.StatusBlocked {
 		t.Fatalf("RecomputeNumber (blocked 2): status=%s err=%v", status, err)
 	}
 	reblockEntries, _, _, err := BlocklistDelta(ctx, sqlDB, sec2, id2, "", 500)
@@ -777,7 +777,7 @@ func TestBlocklistDelta_MalformedPrefixSkipsSpoofQuery(t *testing.T) {
 	if _, err := UpsertReport(ctx, sqlDB, device, numberID, scoring.CategoryOther, scoring.VoteSpam, now); err != nil {
 		t.Fatalf("UpsertReport: %v", err)
 	}
-	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	status, err := RecomputeNumberServing(ctx, sqlDB, numberID, now)
 	if err != nil {
 		t.Fatalf("RecomputeNumber: %v", err)
 	}
@@ -827,7 +827,7 @@ func TestBlocklistDelta_SpoofRemovalOverlapPrefersSpoof(t *testing.T) {
 			t.Fatalf("UpsertReport (scam): %v", err)
 		}
 	}
-	status, err := RecomputeNumber(ctx, sqlDB, numberID, now)
+	status, err := RecomputeNumberServing(ctx, sqlDB, numberID, now)
 	if err != nil {
 		t.Fatalf("RecomputeNumber (blocked): %v", err)
 	}
@@ -849,7 +849,7 @@ func TestBlocklistDelta_SpoofRemovalOverlapPrefersSpoof(t *testing.T) {
 	if _, err := UpsertReport(ctx, sqlDB, device3, numberID, scoring.CategoryOther, scoring.VoteNotSpam, now); err != nil {
 		t.Fatalf("UpsertReport (not_spam): %v", err)
 	}
-	status, err = RecomputeNumber(ctx, sqlDB, numberID, now)
+	status, err = RecomputeNumberServing(ctx, sqlDB, numberID, now)
 	if err != nil {
 		t.Fatalf("RecomputeNumber (walk back): %v", err)
 	}

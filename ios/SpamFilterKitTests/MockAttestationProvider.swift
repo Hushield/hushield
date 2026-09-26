@@ -15,6 +15,9 @@ final class MockAttestationProvider: AttestationProvider {
     var stubAssertion = Data("mock-assertion".utf8)
     var generateKeyIDError: Error?
     var attestError: Error?
+    /// Thrown by the NEXT `attest` call only, then cleared. Lets a test model
+    /// "the stored key is rejected, the replacement is accepted".
+    var attestErrorOnce: Error?
     var assertError: Error?
 
     private(set) var generateKeyIDCallCount = 0
@@ -35,6 +38,10 @@ final class MockAttestationProvider: AttestationProvider {
         attestCallCount += 1
         lastAttestKeyID = keyID
         lastAttestClientDataHash = clientDataHash
+        if let attestErrorOnce {
+            self.attestErrorOnce = nil
+            throw attestErrorOnce
+        }
         if let attestError { throw attestError }
         return stubAttestation
     }

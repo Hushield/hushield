@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# deploy.sh -- ship the HuShield server and recompute binaries to the deploy
-# host and restart the services.
+# deploy.sh -- ship the HuShield server, recompute and seed binaries to the
+# deploy host and restart the services.
 #
 # Invoke via the Makefile, which builds first and enforces the test gate:
 #
@@ -35,7 +35,7 @@ SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-for f in bin/hushield-server bin/hushield-recompute; do
+for f in bin/hushield-server bin/hushield-recompute bin/hushield-seed; do
 	[ -f "$f" ] || die "$f not found. Run 'make build-linux-arm64' first, or use 'make deploy-server'."
 	file "$f" | grep -q 'ARM aarch64' \
 		|| die "$f is not ARM aarch64. The deploy host is Graviton; this binary would not execute."
@@ -44,7 +44,15 @@ done
 echo "==> Deploying to ${DEPLOY_USER}@${DEPLOY_HOST}"
 
 echo "==> Uploading binaries"
-scp "${SSH_OPTS[@]}" bin/hushield-server bin/hushield-recompute \
+scp "${SSH_OPTS[@]}" bin/hushield-server bin/hushield-recompute bin/hushield-seed \
+	"${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/" >/dev/null
+
+# seed-ftc-daily.sh is shipped too because hushield-seed-ftc.service executes
+# it from /opt/hushield/scripts. NOTE: /opt/hushield is not a git working copy,
+# which is why this is a file copy at all -- the real fix is to make it one, so
+# the box can state which commit it is running. Until then, any NEW file this
+# unit needs must be added to this list by hand or it silently stays missing.
+scp "${SSH_OPTS[@]}" scripts/seed-ftc-daily.sh \
 	"${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/" >/dev/null
 
 echo "==> Installing and restarting"
@@ -53,7 +61,12 @@ set -euo pipefail
 
 install -o hushield -g hushield -m 0755 /tmp/hushield-server    ${REMOTE_DIR}/hushield-server
 install -o hushield -g hushield -m 0755 /tmp/hushield-recompute ${REMOTE_DIR}/hushield-recompute
-rm -f /tmp/hushield-server /tmp/hushield-recompute
+# hushield-seed is invoked by scripts/seed-ftc-daily.sh from the
+# hushield-seed-ftc.timer; it is a one-shot importer, so nothing restarts it.
+install -o hushield -g hushield -m 0755 /tmp/hushield-seed       ${REMOTE_DIR}/hushield-seed
+install -d -o hushield -g hushield -m 0755 /opt/hushield/scripts
+install -o hushield -g hushield -m 0755 /tmp/seed-ftc-daily.sh   /opt/hushield/scripts/seed-ftc-daily.sh
+rm -f /tmp/hushield-server /tmp/hushield-recompute /tmp/hushield-seed /tmp/seed-ftc-daily.sh
 
 if [ "${SKIP_RESTART}" = "1" ]; then
 	echo "    SKIP_RESTART=1, not restarting"

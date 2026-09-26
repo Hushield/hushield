@@ -94,6 +94,25 @@ func TouchDevice(ctx context.Context, exec Execer, deviceID uint64, incrementRep
 // that just wrote the report/override. Running it in-tx makes the row lock
 // held by UpsertPhoneNumber serialize concurrent recomputes for the same
 // number, closing the lost-update race between the read and the cached write.
+// RecomputeNumberServing recomputes one number and then refreshes its row in
+// the LIVE blocklist_serving copy, so the change reaches devices on the next
+// sync instead of waiting for the decay pass's swap (up to 6 hours).
+//
+// Request handlers use this. The bulk decay pass deliberately does NOT: it
+// publishes every row at once via SwapBlocklistServing, and patching 732k rows
+// into the live table one at a time would both double its work and destroy the
+// isolation the swap exists to provide.
+func RecomputeNumberServing(ctx context.Context, exec Execer, phoneNumberID uint64, now time.Time) (scoring.Status, error) {
+	status, err := RecomputeNumber(ctx, exec, phoneNumberID, now)
+	if err != nil {
+		return "", err
+	}
+	if err := UpsertServingRow(ctx, exec, phoneNumberID); err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
 func RecomputeNumber(ctx context.Context, exec Execer, phoneNumberID uint64, now time.Time) (scoring.Status, error) {
 	// MySQL TIMESTAMP columns round created_at to the nearest second, which
 	// can put it up to 0.5s ahead of an unrounded now and make a

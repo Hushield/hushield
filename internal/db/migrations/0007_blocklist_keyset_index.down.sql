@@ -1,0 +1,1 @@
+DROP INDEX idx_phone_numbers_updated_at_id ON phone_numbers;

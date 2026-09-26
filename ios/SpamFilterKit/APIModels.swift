@@ -51,6 +51,12 @@ public struct BlocklistData: Decodable, Equatable {
     public let entries: [BlocklistEntry]
     public let count: Int
     public let cursor: String
+    /// How many rows the server can serve in total, so a paging client can
+    /// show progress. Optional because a server predating it omits the field
+    /// entirely -- decoding must not fail against one. Counts servable
+    /// (block/label) rows only, so a delta carrying "unblock" tombstones can
+    /// apply more entries than this; `SyncProgress.fraction` clamps.
+    public let total: Int?
 }
 
 /// `data` payload for `GET /api/v1/numbers/{e164}`.

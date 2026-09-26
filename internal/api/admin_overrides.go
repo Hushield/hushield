@@ -122,7 +122,7 @@ func (h *adminOverridesHandler) writeOverride(ctx context.Context, e164, mode, r
 		return "", err
 	}
 
-	status, err := store.RecomputeNumber(ctx, tx, phoneNumberID, now)
+	status, err := store.RecomputeNumberServing(ctx, tx, phoneNumberID, now)
 	if err != nil {
 		return "", err
 	}
